@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'lda-shell-v3.1';
+const CACHE_NAME = 'lda-shell-v3.2';
 const SHELL_ASSETS = [
   './',
   './style.css',
@@ -9,10 +9,14 @@ const SHELL_ASSETS = [
   './templates.js',
   './krutidev-client.js',
   './phrasebook.js',
+  './motion-ui.js',
   './modules-ui.js',
   './app.js',
   './vendor/fuse.js',
   './vendor/signature_pad.js',
+  './vendor/anime.js',
+  './vendor/auto-animate.js',
+  './vendor/icons.js',
   './assets/icon.svg',
   './fonts/Karma-Regular.ttf',
   './fonts/Karma-Bold.ttf',

@@ -766,32 +766,80 @@
     });
     const months = Object.keys(monthMap).sort().slice(-8);
 
+    const dispRate = issued.length ? Math.round((dispatched.length / issued.length) * 100) : 100;
     const slaRate = needReplyInw.length
       ? Math.round(((needReplyInw.length - overdueInw.length) / needReplyInw.length) * 100)
       : 100;
+    const M = root.MotionUI || {};
+    const ico = (n, s = 16) => (M.ico ? M.ico(n, s) : '');
+    const circ = 163.36; // 2 * PI * 26
 
     const el = document.getElementById('view');
     el.innerHTML = `
       <div class="bar">
         <div>
-          <h2 style="margin:0">📈 Analytics, Compliance &amp; Inspection Audit</h2>
+          <h2 style="margin:0">Analytics, Compliance &amp; Inspection Audit</h2>
           <small class="mut">Real-time Major-Head breakdown, Monthly volume, RTI/SLA compliance, and 1-click DEO/CBSE Inspection Report</small>
         </div>
         <span class="sp"></span>
-        <button class="pri" id="dlInspectPdf">📕 Download Official Inspection Summary (.pdf)</button>
-        <button class="ok" id="dlRegXlsxA">📊 Download Full 4-Sheet Excel (.xlsx)</button>
+        <button class="pri" id="dlInspectPdf">${ico('Download', 15)} Download Official Inspection Summary (.pdf)</button>
+        <button class="ok" id="dlRegXlsxA">${ico('FileSpreadsheet', 15)} Download Full 4-Sheet Excel (.xlsx)</button>
       </div>
 
       <div class="stats">
-        <div class="stat"><b>${issued.length}</b><span>Total Outward Issued</span></div>
-        <div class="stat"><b>${issued.length ? Math.round((dispatched.length / issued.length) * 100) : 100}%</b><span>Dispatch Completion Rate</span></div>
-        <div class="stat"><b>${slaRate}%</b><span>Inward SLA On-Time Rate</span></div>
-        <div class="stat"><b>${repliedInw.length}/${needReplyInw.length}</b><span>Inward Replies Completed</span></div>
-        <div class="stat"><b>${db.students.length + db.staff.length}</b><span>Directory Profiles</span></div>
+        <div class="stat">
+          <div class="stat-top">
+            <div><b data-count="${issued.length}">${issued.length}</b><span>Total Outward Issued</span></div>
+            <span class="stat-ico">${ico('Send', 18)}</span>
+          </div>
+        </div>
+        <div class="stat accent-emerald">
+          <div class="stat-top">
+            <div><b data-count="${dispRate}" data-suffix="%">${dispRate}%</b><span>Dispatch Completion Rate</span></div>
+            <span class="stat-ico">${ico('CheckCircle2', 18)}</span>
+          </div>
+        </div>
+        <div class="stat accent-amber">
+          <div class="stat-top">
+            <div><b data-count="${slaRate}" data-suffix="%">${slaRate}%</b><span>Inward SLA On-Time Rate</span></div>
+            <span class="stat-ico">${ico('Clock', 18)}</span>
+          </div>
+        </div>
+        <div class="stat accent-indigo">
+          <div class="stat-top">
+            <div><b data-count="${db.students.length + db.staff.length}">${db.students.length + db.staff.length}</b><span>Directory Profiles (${repliedInw.length}/${needReplyInw.length} Inward Replied)</span></div>
+            <span class="stat-ico">${ico('GraduationCap', 18)}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="gauge-grid">
+        <div class="gauge-card">
+          <svg class="gauge-svg" viewBox="0 0 64 64" aria-hidden="true">
+            <circle class="gauge-bg" cx="32" cy="32" r="26" fill="none" stroke-width="6"/>
+            <circle class="gauge-fg" cx="32" cy="32" r="26" fill="none" stroke="#059669" stroke-width="6"
+              stroke-dasharray="${circ}" stroke-dashoffset="${circ}" data-ring-pct="${dispRate}" data-circ="${circ}"/>
+          </svg>
+          <div>
+            <b style="font-size:15px">Outward Dispatch Health (${dispRate}%)</b>
+            <div class="mut">${dispatched.length} of ${issued.length} issued letters formally logged in Dispatch Register</div>
+          </div>
+        </div>
+        <div class="gauge-card">
+          <svg class="gauge-svg" viewBox="0 0 64 64" aria-hidden="true">
+            <circle class="gauge-bg" cx="32" cy="32" r="26" fill="none" stroke-width="6"/>
+            <circle class="gauge-fg" cx="32" cy="32" r="26" fill="none" stroke="${slaRate >= 85 ? '#2563eb' : '#d97706'}" stroke-width="6"
+              stroke-dasharray="${circ}" stroke-dashoffset="${circ}" data-ring-pct="${slaRate}" data-circ="${circ}"/>
+          </svg>
+          <div>
+            <b style="font-size:15px">RTI / Urgent Inward SLA Score (${slaRate}%)</b>
+            <div class="mut">${overdueInw.length === 0 ? 'Zero overdue inward escalations' : overdueInw.length + ' inward letter(s) require immediate reply'}</div>
+          </div>
+        </div>
       </div>
 
       <div class="card">
-        <h3>📊 Major Head Correspondence Distribution (मुख्य शीर्षवार पत्राचार)</h3>
+        <h3>Major Head Correspondence Distribution (मुख्य शीर्षवार पत्राचार)</h3>
         ${headCounts.map(hc => {
           const total = hc.out + hc.inw;
           const pct = Math.round((total / maxHead) * 100);
@@ -806,19 +854,21 @@
       </div>
 
       <div class="card">
-        <h3>📅 Monthly Outward vs Inward Volume (मासिक पत्राचार विवरण)</h3>
+        <h3>Monthly Outward vs Inward Volume (मासिक पत्राचार विवरण)</h3>
         ${months.length ? `
-          <table class="tbl">
-            <thead><tr><th>Month (YYYY-MM)</th><th>Outward Issued (जावक)</th><th>Inward Logged (आवक)</th><th>Total Activity</th></tr></thead>
-            <tbody>
-              ${months.map(m => `<tr>
-                <td><b>${esc(m)}</b></td>
-                <td>${monthMap[m].out}</td>
-                <td>${monthMap[m].inw}</td>
-                <td><b>${monthMap[m].out + monthMap[m].inw}</b></td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
+          <div class="table-wrap">
+            <table class="tbl">
+              <thead><tr><th>Month (YYYY-MM)</th><th>Outward Issued (जावक)</th><th>Inward Logged (आवक)</th><th>Total Activity</th></tr></thead>
+              <tbody>
+                ${months.map(m => `<tr>
+                  <td><b>${esc(m)}</b></td>
+                  <td>${monthMap[m].out}</td>
+                  <td>${monthMap[m].inw}</td>
+                  <td><b>${monthMap[m].out + monthMap[m].inw}</b></td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
         ` : '<p class="mut">Issue or log letters to see monthly trends.</p>'}
       </div>
     `;
