@@ -1,0 +1,36 @@
+{
+  "name": "letter-draft-assistant",
+  "version": "2.0.0",
+  "description": "Secure Official Letter Draft Assistant & Outward/Inward Register System (Hindi + English) with DOCX, PDF, Excel (.xlsx) & Google Sheets Sync",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node test/system.test.js",
+    "security-audit": "npm audit --audit-level=low"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shipransh28aug2016-lab/Letter-Draft-Assistant.git"
+  },
+  "keywords": [
+    "letter-draft-assistant",
+    "official-correspondence",
+    "outward-inward-register",
+    "hindi-english-letters",
+    "docx-pdf-excel",
+    "google-sheets-sync"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "docx": "^9.5.1",
+    "exceljs": "^4.4.0",
+    "pdfkit": "^0.17.2"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}
