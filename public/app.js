@@ -20,15 +20,33 @@
   let activeSpeechRec = null;
   let cachedQrMap = {};
   let deferredPwaPrompt = null;
+  let paperZoom = 0.9;
+
+  const M = window.MotionUI || {};
+  const ico = (name, size = 15, cls = '') => (M.ico ? M.ico(name, size, cls) : '');
 
   const outF = { q: '', year: '', status: '', majorHead: '' };
   const sheetF = { q: '', year: '', status: '', majorHead: '', fuzzy: true };
   const inwF = { q: '', status: '', majorHead: '', priority: '' };
 
+  if (M.initTheme) M.initTheme();
+  if (window.hydrateIcons) window.hydrateIcons(document);
+
+  if ($('#themeToggleBtn')) {
+    $('#themeToggleBtn').onclick = () => {
+      const next = M.toggleTheme ? M.toggleTheme() : 'light';
+      toast(next === 'dark' ? 'Executive Midnight Slate theme enabled.' : 'Sovereign Light theme enabled.');
+    };
+  }
+  if ($('#cmdBtn')) {
+    $('#cmdBtn').onclick = () => { if (M.openCommandPalette) M.openCommandPalette(); };
+  }
+
   function toast(msg, ms = 3200) {
     const t = $('#toast');
     t.textContent = msg;
     t.hidden = false;
+    if (M.animateToast) M.animateToast(t);
     clearTimeout(toast._t);
     toast._t = setTimeout(() => { t.hidden = true; }, ms);
   }
@@ -37,6 +55,7 @@
     const m = $('#modal');
     m.innerHTML = `<div class="box">${html}</div>`;
     m.hidden = false;
+    if (M.animateModalOpen) M.animateModalOpen(m);
     m.onclick = e => { if (e.target === m) closeModal(); };
   }
   function closeModal() { $('#modal').hidden = true; }
@@ -206,6 +225,7 @@
     $('#authGate').hidden = false;
     $('#setupForm').hidden = !setupRequired;
     $('#loginForm').hidden = !!setupRequired;
+    if (M.animateAuthGate) M.animateAuthGate();
   }
 
   $('#loginForm').onsubmit = async (e) => {
@@ -287,12 +307,29 @@
     };
   };
 
+  if (M.registerCommandPalette) {
+    M.registerCommandPalette(() => ({
+      db,
+      auth,
+      go,
+      allTemplates,
+      startTemplate: (tplId, lang) => { ed = newFromTemplate(tplId, lang); go('edit'); },
+      openLetter: (id) => {
+        const found = db && db.letters.find(x => x.id === id);
+        if (found) { ed = JSON.parse(JSON.stringify(found)); go('edit'); }
+      },
+      scanInwardNow: () => { go('inw'); setTimeout(() => { if ($('#iScanBtn')) $('#iScanBtn').click(); }, 90); },
+      exportMasterXlsx: () => downloadBinary('/api/export/register-xlsx', 'GET', null, `Letter_Register_${Core.todayISO()}.xlsx`),
+    }));
+  }
+
   async function enterApp() {
     db = await api('/api/db');
     $('#authGate').hidden = true;
     $('#appShell').hidden = false;
     $('#userLabel').textContent = `${auth.user.displayName} (${auth.user.role === 'admin' ? 'Admin' : 'Staff'})`;
     $('#navUsers').hidden = auth.user.role !== 'admin';
+    if (window.hydrateIcons) window.hydrateIcons($('#appShell'));
     refreshChrome();
     go(curView || 'dash');
   }
@@ -407,7 +444,14 @@
   function go(v) {
     if (activeSpeechRec) { try { activeSpeechRec.stop(); } catch (_) {} activeSpeechRec = null; }
     curView = v;
-    $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+    let activeBtn = null;
+    $$('#nav button').forEach(b => {
+      const isOn = b.dataset.v === v;
+      b.classList.toggle('on', isOn);
+      if (isOn) activeBtn = b;
+    });
+    if (M.moveNavIndicator) requestAnimationFrame(() => M.moveNavIndicator(activeBtn));
+
     const uiCtx = makeUiCtx();
     const views = {
       dash: viewDash,
@@ -423,8 +467,16 @@
       users: viewUsers,
       set: viewSet,
     };
-    (views[v] || viewDash)();
+    const res = (views[v] || viewDash)();
+    Promise.resolve(res).then(() => {
+      if (M.animateViewEnter) M.animateViewEnter($('#view'));
+    });
   }
+
+  window.addEventListener('resize', () => {
+    const activeBtn = $('#nav button.on');
+    if (activeBtn && M.moveNavIndicator) M.moveNavIndicator(activeBtn, true);
+  });
 
   $$('#nav button').forEach(b => { b.onclick = () => go(b.dataset.v); });
 
@@ -450,49 +502,77 @@
     el.innerHTML = `
       ${overdueInw.length ? `
         <div class="alert-banner danger">
-          <div>🚨 <b>${overdueInw.length} Inward Letter(s) Overdue!</b> (${esc(overdueInw.map(r => `${r.no}: ${r.from}`).slice(0, 2).join(' · '))})</div>
-          <button class="sm danger" id="goOverdueBtn">📥 Open Inward Escalations →</button>
+          <div>${ico('AlertTriangle', 16)} <b>${overdueInw.length} Inward Letter(s) Overdue!</b> (${esc(overdueInw.map(r => `${r.no}: ${r.from}`).slice(0, 2).join(' · '))})</div>
+          <button class="sm danger" id="goOverdueBtn">${ico('Inbox', 14)} Open Inward Escalations →</button>
         </div>
       ` : (dueSoonInw.length ? `
         <div class="alert-banner warn">
-          <div>⏰ <b>${dueSoonInw.length} Inward Letter(s) Due Within 3 Days</b> — timely compliance recommended.</div>
-          <button class="sm" id="goOverdueBtn">📥 View Inward Deadlines →</button>
+          <div>${ico('Clock', 16)} <b>${dueSoonInw.length} Inward Letter(s) Due Within 3 Days</b> — timely compliance recommended.</div>
+          <button class="sm" id="goOverdueBtn">${ico('Inbox', 14)} View Inward Deadlines →</button>
         </div>
       ` : '')}
 
       ${pendingAppr.length ? `
         <div class="alert-banner info">
-          <div>✍️ <b>${pendingAppr.length} Draft Letter(s) Waiting in Principal Approval Queue</b></div>
-          <button class="sm pri" id="goApprBtn">✅ Open Approval Queue →</button>
+          <div>${ico('CheckCircle2', 16)} <b>${pendingAppr.length} Draft Letter(s) Waiting in Principal Approval Queue</b></div>
+          <button class="sm pri" id="goApprBtn">${ico('Check', 14)} Open Approval Queue →</button>
         </div>
       ` : ''}
 
       <div class="bar">
-        <h2 style="margin:0">📊 School Office Command Center</h2>
+        <div>
+          <h2 style="margin:0">School Office Command Center</h2>
+          <small class="mut">Real-time Correspondence, Certificate Registers &amp; SLA Compliance · Press <kbd class="kbd-tag">Ctrl K</kbd> to quick-jump</small>
+        </div>
         <span class="sp"></span>
-        <button class="pri" id="dNew">+ New Letter</button>
-        <button class="ok" id="dBatch">⚡ Bulk Mail-Merge</button>
-        <button id="dScan">📷 Scan Inward (OCR)</button>
-        <button id="dXlsx">📊 Master Excel (.xlsx)</button>
+        <button class="pri" id="dNew">${ico('Plus', 15)} New Letter</button>
+        <button class="ok" id="dBatch">${ico('Layers', 15)} Bulk Mail-Merge</button>
+        <button id="dScan">${ico('ScanLine', 15)} Scan Inward (OCR)</button>
+        <button id="dXlsx">${ico('FileSpreadsheet', 15)} Master Excel (.xlsx)</button>
       </div>
 
       <div class="stats">
-        <div class="stat" data-go="sheet"><b>${issuedThisYr}</b><span>Issued in ${yk} · Next: ${esc(Core.peekRef(db, 'out', Core.todayISO(), 'ADM').ref)}</span></div>
-        <div class="stat" data-go="approve"><b>${pendingAppr.length}</b><span>Approval Queue (अनुमोदन कतार)</span></div>
-        <div class="stat" data-go="dir"><b>${db.students.length + db.staff.length}</b><span>Students (${db.students.length}) &amp; Staff (${db.staff.length})</span></div>
-        <div class="stat" data-go="inw"><b>${pendIn}</b><span>Inward Replies Pending (${overdueInw.length} Overdue)</span></div>
-        <div class="stat" data-go="out" data-s="draft"><b>${drafts}</b><span>Saved Drafts</span></div>
+        <div class="stat" data-go="sheet">
+          <div class="stat-top">
+            <div><b data-count="${issuedThisYr}">${issuedThisYr}</b><span>Issued in ${yk} · Next: ${esc(Core.peekRef(db, 'out', Core.todayISO(), 'ADM').ref)}</span></div>
+            <span class="stat-ico">${ico('ShieldCheck', 18)}</span>
+          </div>
+        </div>
+        <div class="stat accent-indigo" data-go="approve">
+          <div class="stat-top">
+            <div><b data-count="${pendingAppr.length}">${pendingAppr.length}</b><span>Approval Queue (अनुमोदन कतार)</span></div>
+            <span class="stat-ico">${ico('CheckCircle2', 18)}</span>
+          </div>
+        </div>
+        <div class="stat accent-emerald" data-go="dir">
+          <div class="stat-top">
+            <div><b data-count="${db.students.length + db.staff.length}">${db.students.length + db.staff.length}</b><span>Students (${db.students.length}) &amp; Staff (${db.staff.length})</span></div>
+            <span class="stat-ico">${ico('GraduationCap', 18)}</span>
+          </div>
+        </div>
+        <div class="stat accent-amber" data-go="inw">
+          <div class="stat-top">
+            <div><b data-count="${pendIn}">${pendIn}</b><span>Inward Replies Pending (${overdueInw.length} Overdue)</span></div>
+            <span class="stat-ico">${ico('Inbox', 18)}</span>
+          </div>
+        </div>
+        <div class="stat" data-go="out" data-s="draft">
+          <div class="stat-top">
+            <div><b data-count="${drafts}">${drafts}</b><span>Saved Drafts</span></div>
+            <span class="stat-ico">${ico('FilePenLine', 18)}</span>
+          </div>
+        </div>
       </div>
 
       <div class="card">
         <div class="bar">
           <h3 style="margin:0">Recent Letters &amp; Certificates</h3>
           <span class="sp"></span>
-          <button class="sm" id="goAnalyticsBtn">📈 View Full Analytics &amp; Audit →</button>
+          <button class="sm" id="goAnalyticsBtn">${ico('BarChart3', 14)} View Full Analytics &amp; Audit →</button>
         </div>
         ${recent.length ? `<div class="table-wrap"><table class="tbl">
           <thead><tr><th>Ref. No.</th><th>Date</th><th>Major Head</th><th>Recipient / Party</th><th>Subject</th><th>Status</th><th></th></tr></thead>
-          <tbody>${recent.map(l => `<tr>
+          <tbody class="auto-anim">${recent.map(l => `<tr>
             <td><b>${esc(l.ref || '—')}</b></td>
             <td>${esc(Core.fmtDateDMY(l.date))}</td>
             <td><span class="pill p-head">${esc(l.majorHead || 'ADM')}</span></td>
@@ -501,7 +581,7 @@
             <td><span class="pill p-${l.status}">${esc(l.status)}</span></td>
             <td><button class="sm" data-open="${l.id}">Open</button></td>
           </tr>`).join('')}</tbody></table></div>`
-        : '<p class="mut">No letters yet. Click <b>+ New Letter</b> or <b>⚡ Bulk Mail-Merge</b>.</p>'}
+        : '<p class="mut">No letters yet. Click <b>+ New Letter</b> or <b>Bulk Mail-Merge</b>.</p>'}
       </div>
     `;
 
@@ -614,28 +694,28 @@
 
     el.innerHTML = `
       <div class="bar noprint">
-        <button id="eSave">💾 Save</button>
-        ${!issued && !mustRouteApproval ? `<button class="pri" id="eIssue">✅ Issue Ref. No. (${esc(Core.peekRef(db, 'out', ed.date, ed.majorHead).ref)})</button>` : ''}
-        ${!issued && ed.status !== 'pending_approval' ? `<button class="${mustRouteApproval ? 'pri' : 'warn-btn'}" id="eSendAppr">📤 Send for Principal Approval</button>` : ''}
-        ${!issued && ed.status === 'pending_approval' && isAdmin ? `<button class="ok" id="eApproveNow">✅ Principal Approve &amp; Issue</button>` : ''}
-        <button class="ok" id="eDocx" title="Download Editable Microsoft Word (.docx)">📝 Word (.docx)</button>
-        <button class="pri" id="ePdf" title="Download Font-Embedded Server PDF (.pdf)">📕 PDF (.pdf)</button>
-        <button id="ePrint" title="Direct Browser Print">🖨 Print</button>
-        ${issued ? `<button id="eShareWa" title="Share via WhatsApp / Email">📲 Share</button>` : ''}
-        <button id="eLiveSign" title="Sign on Screen with Mouse/Touch">✍️ Live Sign</button>
-        <button id="eDup" title="Duplicate as New Draft">📋 Copy</button>
+        <button id="eSave">${ico('Check', 14)} Save</button>
+        ${!issued && !mustRouteApproval ? `<button class="pri" id="eIssue">${ico('ShieldCheck', 15)} Issue Ref. No. (${esc(Core.peekRef(db, 'out', ed.date, ed.majorHead).ref)})</button>` : ''}
+        ${!issued && ed.status !== 'pending_approval' ? `<button class="${mustRouteApproval ? 'pri' : 'warn-btn'}" id="eSendAppr">${ico('Send', 14)} Send for Principal Approval</button>` : ''}
+        ${!issued && ed.status === 'pending_approval' && isAdmin ? `<button class="ok" id="eApproveNow">${ico('ShieldCheck', 15)} Principal Approve &amp; Issue</button>` : ''}
+        <button class="ok" id="eDocx" title="Download Editable Microsoft Word (.docx)">${ico('FileText', 14)} Word (.docx)</button>
+        <button class="pri" id="ePdf" title="Download Font-Embedded Server PDF (.pdf)">${ico('Download', 14)} PDF (.pdf)</button>
+        <button id="ePrint" title="Direct Browser Print">${ico('Printer', 14)} Print</button>
+        ${issued ? `<button id="eShareWa" title="Share via WhatsApp / Email">${ico('Share2', 14)} Share</button>` : ''}
+        <button id="eLiveSign" title="Sign on Screen with Mouse/Touch">${ico('PenTool', 14)} Live Sign</button>
+        <button id="eDup" title="Duplicate as New Draft">${ico('Copy', 14)} Copy</button>
         ${issued && ed.status !== 'cancelled' && isAdmin ? `<button class="danger" id="eCancel">Cancel Letter</button>` : ''}
         <span class="sp"></span>
         <span class="pill p-${ed.status}">${esc(ed.ref ? ed.status + ' · ' + ed.ref : ed.status)}</span>
       </div>
 
       ${ed.status === 'returned' && ed.approvalNote ? `<div class="warn noprint">↩ <b>Returned by Principal for Revision:</b> ${esc(ed.approvalNote)}</div>` : ''}
-      ${issued ? `<div class="warn noprint">🔒 Official Ref. No. <b>${esc(ed.ref)}</b> is permanently locked.</div>` : ''}
+      ${issued ? `<div class="warn noprint">${ico('Lock', 14)} Official Ref. No. <b>${esc(ed.ref)}</b> is permanently locked &amp; HMAC-signed.</div>` : ''}
 
       <div class="editor">
         <div class="ed-pane noprint">
           <div class="card">
-            <h3>1. Classification, Template &amp; Language</h3>
+            <h3><span class="step-badge">01</span> Classification, Template &amp; Language</h3>
             <div class="row g">
               <label>Template / पत्र प्रारूप
                 <select id="eTpl">
@@ -673,15 +753,15 @@
 
           <div class="card" id="fieldsCard" ${t && t.fields && t.fields.length ? '' : 'hidden'}>
             <div class="bar" style="margin-bottom:8px">
-              <h3 style="margin:0">2. Template Details (विवरण भरें)</h3>
+              <h3 style="margin:0"><span class="step-badge">02</span> Template Details (विवरण भरें)</h3>
               <span class="sp"></span>
-              <button class="sm" id="eReapply">↻ Regenerate Text</button>
+              <button class="sm" id="eReapply">${ico('RefreshCw', 13)} Regenerate Text</button>
             </div>
 
             <!-- MODULE 1: STUDENT / STAFF DIRECTORY INSTANT AUTO-FILL -->
             <div class="autofill-box">
-              <div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:4px">🎓 Auto-Fill from Student / Staff Master Directory (${db.students.length} Students · ${db.staff.length} Staff)</div>
-              <input id="afInput" placeholder="🔍 Type Student Name, Admission No., Roll No., or Staff Name to auto-fill all fields…">
+              <div style="font-size:12px;font-weight:700;color:#059669;margin-bottom:4px">${ico('GraduationCap', 14)} Auto-Fill from Student / Staff Master Directory (${db.students.length} Students · ${db.staff.length} Staff)</div>
+              <input id="afInput" placeholder="Type Student Name, Admission No., Roll No., or Staff Name to auto-fill all fields…">
               <div id="afDrop" class="af-results" hidden></div>
               <div id="afDupWarn" style="margin-top:6px;font-size:12px;color:#b45309" hidden></div>
             </div>
@@ -691,12 +771,12 @@
 
           <div class="card">
             <div class="bar" style="margin-bottom:8px">
-              <h3 style="margin:0">3. Smart Bilingual Drafting Studio</h3>
+              <h3 style="margin:0"><span class="step-badge">03</span> Smart Bilingual Drafting Studio</h3>
               <span class="sp"></span>
-              <button class="sm" id="btnVoice" title="Speak in Hindi or English to dictate directly into cursor">🎙 Voice Dictate</button>
-              <button class="sm ${phoneticMode ? 'pri' : ''}" id="btnPhonetic" title="Type Roman Hindi e.g. 'savinya nivedan' + Space -> सविनय निवेदन">⌨ Phonetic हिंदी: ${phoneticMode ? 'ON' : 'OFF'}</button>
-              <button class="sm" id="btnPhrasebook" title="Insert from 80+ Official Sarkari Phrases">📚 Phrasebook</button>
-              <button class="sm" id="btnKruti" title="Convert legacy KrutiDev-010 text to Unicode">🔤 KrutiDev</button>
+              <button class="sm" id="btnVoice" title="Speak in Hindi or English to dictate directly into cursor">${ico('Mic', 13)} Voice Dictate</button>
+              <button class="sm ${phoneticMode ? 'pri' : ''}" id="btnPhonetic" title="Type Roman Hindi e.g. 'savinya nivedan' + Space -> सविनय निवेदन">${ico('Keyboard', 13)} Phonetic हिंदी: ${phoneticMode ? 'ON' : 'OFF'}</button>
+              <button class="sm" id="btnPhrasebook" title="Insert from 80+ Official Sarkari Phrases">${ico('BookOpen', 13)} Phrasebook</button>
+              <button class="sm" id="btnKruti" title="Convert legacy KrutiDev-010 text to Unicode">${ico('Languages', 13)} KrutiDev</button>
             </div>
 
             <div class="ph-box">
@@ -757,14 +837,27 @@
         </div>
 
         <div class="pv-wrap">
-          <div class="mut noprint pv-tools" style="margin-bottom:6px">
-            Live A4 Preview · Yellow <code>[tags]</code> highlight unfilled placeholders · Font: <b>${db.settings.fontFamily === 'mukta' ? 'Mukta' : 'Karma'}</b>
+          <div class="mut noprint pv-tools">
+            <span>Live A4 Print Canvas · Yellow <code>[tags]</code> = unfilled · Font: <b>${db.settings.fontFamily === 'mukta' ? 'Mukta' : 'Karma'}</b></span>
+            <div class="zoom-seg" role="group" aria-label="A4 Preview Zoom">
+              ${[0.75, 0.9, 1].map(z => `<button type="button" data-zoom="${z}" class="${paperZoom === z ? 'on' : ''}">${Math.round(z * 100)}%</button>`).join('')}
+            </div>
           </div>
-          <div id="pvHost">${renderPaper(ed)}</div>
+          <div class="pv-desk">
+            <div id="pvHost" style="zoom:${paperZoom}">${renderPaper(ed)}</div>
+          </div>
         </div>
       </div>`;
 
     const paint = () => { $('#pvHost').innerHTML = renderPaper(ed); };
+
+    $$('[data-zoom]', el).forEach(zb => {
+      zb.onclick = () => {
+        paperZoom = parseFloat(zb.dataset.zoom) || 1;
+        $('#pvHost').style.zoom = String(paperZoom);
+        $$('[data-zoom]', el).forEach(b => b.classList.toggle('on', b === zb));
+      };
+    });
 
     const buildFields = () => {
       const tp = findTpl(ed.tpl);
@@ -1067,6 +1160,7 @@
       ed = await op('saveLetter', ed);
       toast(`Issued Official Ref. No. ${ed.ref}`);
       viewEdit();
+      if (M.playSealIssuedEffect) setTimeout(() => M.playSealIssuedEffect(ed.ref), 60);
     };
 
     if ($('#eSendAppr')) $('#eSendAppr').onclick = async () => {
@@ -1087,6 +1181,7 @@
       ed = await op('saveLetter', ed);
       toast(`Approved & Issued Ref. No. ${ed.ref}`);
       viewEdit();
+      if (M.playSealIssuedEffect) setTimeout(() => M.playSealIssuedEffect(ed.ref), 60);
     };
 
     $('#eDocx').onclick = () => {
@@ -1573,16 +1668,20 @@
     };
 
     modal(`
-      <h3>${r ? 'Edit Inward ' + esc(x.no) : '📥 Log Inward Letter + Optional Offline OCR Scan'}</h3>
+      <h3>${r ? 'Edit Inward ' + esc(x.no) : ico('Inbox', 17) + ' Log Inward Letter + Offline AI OCR Scan'}</h3>
 
-      <div style="background:#f0fdf4;border:1px dashed #22c55e;border-radius:8px;padding:10px;margin-bottom:10px">
+      <div class="ocr-scan-box">
         <div class="bar" style="margin:0">
           <div>
-            <b style="color:#166534">📷 Smart Offline Paper Scan (Hindi + English OCR)</b>
+            <b style="color:#059669">${ico('ScanLine', 15)} Smart Offline Paper Scan (Hindi + English OCR)</b>
             <div class="mut">Upload photo/scan (PNG/JPG/WEBP) — runs 100% locally via Tesseract.js</div>
           </div>
           <span class="sp"></span>
-          <label class="btn ok" style="margin:0;cursor:pointer">📤 Select Scan Image<input type="file" id="fScanInput" accept="image/png,image/jpeg,image/webp" hidden></label>
+          <label class="btn ok" style="margin:0;cursor:pointer">${ico('Upload', 14)} Select Scan Image<input type="file" id="fScanInput" accept="image/png,image/jpeg,image/webp" hidden></label>
+        </div>
+        <div id="ocrPreviewStage" class="ocr-preview-stage" hidden>
+          <img id="ocrPreviewImg" alt="Scanned Paper Preview">
+          <div id="ocrLaser" class="ocr-laser-beam" hidden></div>
         </div>
         <div id="ocrStatus" class="mut" style="margin-top:6px">${x.attachment ? '✅ Scan attached (' + esc(x.attachment) + ')' : ''}</div>
       </div>
@@ -1628,10 +1727,19 @@
     $('#fScanInput').onchange = async (e) => {
       const f = e.target.files[0];
       if (!f) return;
-      $('#ocrStatus').textContent = '⏳ Running offline Hindi + English OCR… कृपया प्रतीक्षा करें';
+      $('#ocrStatus').textContent = '⏳ Optical Scanner reading Hindi + English text locally… कृपया प्रतीक्षा करें';
       try {
         const dataUrl = await fileToDataUrl(f, 5 * 1024 * 1024);
+        const stage = $('#ocrPreviewStage');
+        const prevImg = $('#ocrPreviewImg');
+        const laser = $('#ocrLaser');
+        if (stage && prevImg) {
+          prevImg.src = dataUrl;
+          stage.hidden = false;
+          if (laser) laser.hidden = false;
+        }
         const res = await api('/api/inward/ocr', { dataUrl, saveScan: true });
+        if (laser) laser.hidden = true;
         curAttachment = res.attachment || '';
         curOcrText = res.rawText || '';
         if (res.from && !$('#fFrom').value) $('#fFrom').value = res.from;
@@ -1641,6 +1749,7 @@
         if (res.priority) { $('#fPrio').value = res.priority; updateDueFromPrio(); }
         $('#ocrStatus').textContent = `✅ Scan saved & OCR extracted (${curOcrText.length} chars)! Fields auto-filled.`;
       } catch (err) {
+        if ($('#ocrLaser')) $('#ocrLaser').hidden = true;
         $('#ocrStatus').textContent = '❌ OCR error: ' + err.message;
       }
     };
@@ -1676,26 +1785,31 @@
   // ==================== 7. TEMPLATES GALLERY ====================
   function viewTpl() {
     const el = $('#view');
-    const customList = db.customTemplates || [];
     el.innerHTML = `
       <div class="bar">
-        <h2 style="margin:0">🧩 Official Bilingual Templates (${allTemplates().length})</h2>
+        <div>
+          <h2 style="margin:0">Official Bilingual Templates (${allTemplates().length})</h2>
+          <small class="mut">Every template includes authentic English &amp; हिंदी (Devanagari) wording, auto-assigned Major Head &amp; QR readiness</small>
+        </div>
         <span class="sp"></span>
-        <button class="pri" id="btnNewTpl">+ Create Custom Template</button>
+        <button class="pri" id="btnNewTpl">${ico('Plus', 15)} Create Custom Template</button>
       </div>
-      <div class="stats" style="grid-template-columns:repeat(auto-fill,minmax(275px,1fr))">
+      <div class="tpl-grid">
         ${allTemplates().map(t => `
-          <div class="card" style="margin:0">
-            <div class="bar" style="margin-bottom:4px">
-              <span class="pill p-head">${esc(t.majorHead || 'ADM')}</span>
-              <small class="mut">${esc(t.layout.toUpperCase())}</small>
+          <div class="card tpl-card">
+            <div>
+              <div class="bar" style="margin-bottom:6px">
+                <span class="pill p-head">${esc(t.majorHead || 'ADM')}</span>
+                <span class="sp"></span>
+                <small class="mut" style="font-weight:600">${esc(t.layout.toUpperCase())}</small>
+              </div>
+              <h3 style="margin-bottom:6px">${esc(t.name)}</h3>
+              <p class="mut" style="margin:0 0 12px">${esc((t.fields || []).length)} smart fields · Bilingual EN + हिंदी</p>
             </div>
-            <h3 style="margin-bottom:6px">${esc(t.name)}</h3>
-            <p class="mut" style="margin:0 0 10px">${esc((t.fields || []).length)} placeholders · EN + हिंदी</p>
             <div class="bar" style="margin:0">
-              <button class="pri sm" data-use="${esc(t.id)}" data-l="en">Draft EN</button>
-              <button class="ok sm" data-use="${esc(t.id)}" data-l="hi">हिंदी में बनाएँ</button>
-              ${t.custom && auth.user.role === 'admin' ? `<button class="danger sm" data-deltpl="${esc(t.id)}">🗑</button>` : ''}
+              <button class="pri sm" data-use="${esc(t.id)}" data-l="en">${ico('FilePenLine', 13)} Draft EN</button>
+              <button class="ok sm" data-use="${esc(t.id)}" data-l="hi">${ico('Languages', 13)} हिंदी में बनाएँ</button>
+              ${t.custom && auth.user.role === 'admin' ? `<button class="danger sm" data-deltpl="${esc(t.id)}">${ico('Trash2', 13)}</button>` : ''}
             </div>
           </div>`).join('')}
       </div>

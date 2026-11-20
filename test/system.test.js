@@ -321,13 +321,26 @@ async function req(baseUrl, pathname, opts = {}) {
       assert.strictEqual(KrutiDev.toUnicode('izkpk;Z'), 'प्राचार्य');
     });
 
-    // 9. Module 7: Fuse.js + SignaturePad Vendor Bundles + Inspection PDF + 4-Sheet Excel + PWA Assets
-    await step('Module 7: Serves local Fuse.js & SignaturePad bundles, PWA manifest/SW, 4-sheet Excel, and Inspection Audit PDF', async () => {
+    // 9. Module 7: Fuse.js + SignaturePad + Anime.js + AutoAnimate + Lucide Vendor Bundles + Inspection PDF + 4-Sheet Excel + PWA Assets
+    await step('Module 7: Serves local Fuse.js, SignaturePad, Anime.js, AutoAnimate & Lucide Icon bundles, PWA assets, 4-sheet Excel, and Inspection PDF', async () => {
       assert.strictEqual((await req(base, '/vendor/fuse.js')).status, 200);
       assert.strictEqual((await req(base, '/vendor/signature_pad.js')).status, 200);
+      assert.strictEqual((await req(base, '/vendor/anime.js')).status, 200);
+      assert.strictEqual((await req(base, '/vendor/auto-animate.js')).status, 200);
+      assert.strictEqual((await req(base, '/vendor/icons.js')).status, 200);
+      assert.strictEqual((await req(base, '/motion-ui.js')).status, 200);
       assert.strictEqual((await req(base, '/manifest.json')).status, 200);
       assert.strictEqual((await req(base, '/sw.js')).status, 200);
-      assert.strictEqual((await req(base, '/verify')).status, 200);
+
+      const indexHtml = await (await req(base, '/')).text();
+      assert.ok(indexHtml.includes('id="authCrestSvg"'), 'Auth gate must include SVG Sovereign Crest motion stage');
+      assert.ok(indexHtml.includes('id="navIndicator"'), 'Sidebar must include spring-animated sliding nav indicator');
+      assert.ok(indexHtml.includes('id="cmdBtn"'), 'Topbar must include Ctrl+K Quick Command Palette trigger');
+
+      const verifyRes = await req(base, '/verify');
+      assert.strictEqual(verifyRes.status, 200);
+      const verifyHtml = await verifyRes.text();
+      assert.ok(verifyHtml.includes('vendor/anime.js'), 'Verification portal must load local Anime.js bundle');
 
       const inspRes = await req(base, '/api/export/inspection-pdf', { headers: { Cookie: adminCookie } });
       assert.strictEqual(inspRes.status, 200);
@@ -370,6 +383,10 @@ async function req(baseUrl, pathname, opts = {}) {
         'scripts/prepare-deploy.js',
         'public/vendor/fuse.js',
         'public/vendor/signature_pad.js',
+        'public/vendor/anime.js',
+        'public/vendor/auto-animate.js',
+        'public/vendor/icons.js',
+        'public/motion-ui.js',
         'public/static-vault.js',
         'public/verify.html',
       ];

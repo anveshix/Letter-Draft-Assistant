@@ -7,39 +7,107 @@
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <style>
-    body { background: radial-gradient(circle at top, #1e3a8a 0%, #0f172a 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-    .vbox { width: 100%; max-width: 580px; background: #fff; border-radius: 16px; padding: 28px; box-shadow: 0 24px 60px rgba(0,0,0,0.4); }
-    .v-ok { background: #f0fdf4; border: 2px solid #22c55e; border-radius: 12px; padding: 16px; color: #14532d; margin-top: 16px; }
-    .v-rev { background: #fef2f2; border: 2px solid #ef4444; border-radius: 12px; padding: 16px; color: #7f1d1d; margin-top: 16px; }
-    .v-grid { display: grid; grid-template-columns: 150px 1fr; gap: 8px 12px; margin-top: 12px; font-size: 13.5px; }
-    .v-grid b { color: #334155; }
+    body.verify-body {
+      background:
+        radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.30), transparent 45%),
+        radial-gradient(circle at 80% 80%, rgba(16, 185, 129, 0.16), transparent 45%),
+        linear-gradient(135deg, #071120 0%, #0f213e 55%, #091324 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 22px;
+    }
+    .vbox {
+      width: 100%;
+      max-width: 620px;
+      background: #ffffff;
+      color: #0f172a;
+      border-radius: 20px;
+      padding: 32px;
+      box-shadow: 0 32px 80px -12px rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+    }
+    .vbox label { color: #334155; }
+    .vbox input {
+      background: #f8fafc;
+      color: #0f172a;
+      border-color: #cbd5e1;
+      padding: 8.5px 11px;
+    }
+    .vbox input:focus { background: #ffffff; }
+    .v-head {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 16px;
+    }
+    .v-ok {
+      background: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 100%);
+      border: 1.5px solid #22c55e;
+      border-radius: 14px;
+      padding: 18px;
+      color: #14532d;
+      margin-top: 18px;
+    }
+    .v-rev {
+      background: linear-gradient(180deg, #fef2f2 0%, #fee2e2 100%);
+      border: 1.5px solid #ef4444;
+      border-radius: 14px;
+      padding: 18px;
+      color: #7f1d1d;
+      margin-top: 18px;
+    }
+    .v-banner-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .v-grid {
+      display: grid;
+      grid-template-columns: 158px 1fr;
+      gap: 8px 12px;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(21, 128, 61, 0.18);
+      font-size: 13.5px;
+    }
+    @media (max-width: 520px) { .v-grid { grid-template-columns: 1fr; gap: 3px; } }
+    .v-grid b { color: #1e293b; }
   </style>
 </head>
-<body>
-  <div class="vbox">
-    <div style="display:flex;align-items:center;gap:12px;border-bottom:1px solid #e2e8f0;padding-bottom:14px">
-      <div class="auth-logo">🛡</div>
+<body class="verify-body">
+  <div class="vbox" id="verifyCard">
+    <div class="v-head">
+      <div class="auth-logo"><span data-icon="ShieldCheck" data-icon-size="24"></span></div>
       <div>
-        <h2 style="margin:0;color:#162d4c">Document Authenticity Verification</h2>
-        <small class="mut">आधिकारिक पत्र एवं प्रमाण-पत्र सत्यता जाँच पोर्टल</small>
+        <h2 style="margin:0;color:#0f172a">Document Authenticity Verification</h2>
+        <small class="mut" style="color:#64748b">आधिकारिक पत्र एवं प्रमाण-पत्र सत्यता जाँच पोर्टल · HMAC-SHA256 Digital Seal</small>
       </div>
     </div>
 
-    <form id="vf" style="margin-top:16px">
+    <form id="vf" style="margin-top:18px">
       <div class="row g">
         <label>Ref. No. (पत्रांक)<input id="vRef" required placeholder="e.g. 321/26"></label>
-        <label style="flex:1.5">Verification Code (16-अंकीय सत्यापन कोड)<input id="vCode" required placeholder="XXXX-XXXX-XXXX-XXXX"></label>
-        <button class="pri" style="margin-bottom:8px">🔍 Verify</button>
+        <label style="flex:1.6">Verification Code (16-अंकीय सत्यापन कोड)<input id="vCode" required placeholder="XXXX-XXXX-XXXX-XXXX"></label>
+        <button class="pri" style="margin-bottom:9px"><span data-icon="Search" data-icon-size="15"></span> Verify</button>
       </div>
     </form>
 
     <div id="vOut"></div>
-    <div style="margin-top:18px;text-align:center">
-      <a href="./" style="font-size:12.5px;color:#2563eb;text-decoration:none">← Authorized Office Login (कार्यालय लॉगिन)</a>
+
+    <div style="margin-top:20px;padding-top:14px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:12.5px">
+      <span style="color:#64748b">Tamper-Evident Cryptographic Verification</span>
+      <a href="./" style="color:#1d4ed8;font-weight:600;text-decoration:none">← Authorized Office Login (कार्यालय लॉगिन)</a>
     </div>
   </div>
+
+  <script src="vendor/anime.js"></script>
+  <script src="vendor/icons.js"></script>
   <script src="core.js"></script>
   <script src="static-vault.js"></script>
+  <script src="motion-ui.js"></script>
   <script src="verify-page.js"></script>
 </body>
 </html>

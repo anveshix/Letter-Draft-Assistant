@@ -3,64 +3,118 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#162d4c">
-  <title>Letter Draft Assistant v3.0 — Official School Operating System</title>
+  <meta name="theme-color" content="#0b192c">
+  <title>Letter Draft Assistant v3.0 — Sovereign School Correspondence &amp; Certificate OS</title>
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-  <!-- ==================== SECURE AUTHENTICATION GATE ==================== -->
+  <!-- ==================== EXECUTIVE SPLIT-SCREEN AUTHENTICATION GATE ==================== -->
   <div id="authGate" class="auth-gate">
-    <div class="auth-card">
-      <div class="auth-brand">
-        <div class="auth-logo">📜</div>
+    <div class="auth-shell">
+
+      <!-- Left Architectural Motion Showcase -->
+      <div class="auth-showcase">
         <div>
-          <h1 id="authSchoolName">CM School of Excellence Girls' Dumka</h1>
-          <p>Letter Draft Assistant v3.0 · Secure School Correspondence &amp; Certificate OS</p>
+          <div class="auth-kicker">
+            <span data-icon="ShieldCheck" data-icon-size="14"></span>
+            Sovereign Institutional Workspace · v3.0
+          </div>
+
+          <div class="auth-crest-stage">
+            <svg id="authCrestSvg" viewBox="0 0 200 200" fill="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="crestGrad" x1="30" y1="20" x2="170" y2="180" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#60A5FA"/>
+                  <stop offset="55%" stop-color="#3B82F6"/>
+                  <stop offset="100%" stop-color="#34D399"/>
+                </linearGradient>
+              </defs>
+              <!-- Ambient Orbit Constellation -->
+              <g id="authOrbitRing">
+                <circle cx="100" cy="100" r="86" stroke="rgba(147,197,253,0.22)" stroke-width="1.2" stroke-dasharray="5 6"/>
+                <circle cx="100" cy="14" r="4" fill="#60A5FA"/>
+                <circle cx="186" cy="100" r="3.5" fill="#34D399"/>
+                <circle cx="100" cy="186" r="4" fill="#60A5FA"/>
+                <circle cx="14" cy="100" r="3.5" fill="#FBBF24"/>
+              </g>
+              <!-- Drawable Institutional Crest Shield & Document -->
+              <circle class="draw-stroke" cx="100" cy="100" r="70" stroke="rgba(96,165,250,0.35)" stroke-width="1.5"/>
+              <path class="draw-stroke" d="M100 36L148 56V98C148 132 127 154 100 166C73 154 52 132 52 98V56L100 36Z" fill="rgba(29,78,216,0.18)" stroke="url(#crestGrad)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+              <rect class="draw-stroke" x="76" y="68" width="48" height="58" rx="5" fill="rgba(15,23,42,0.55)" stroke="#93C5FD" stroke-width="1.8"/>
+              <path class="draw-stroke" d="M85 82H115M85 93H115M85 104H103" stroke="#DBEAFE" stroke-width="2" stroke-linecap="round"/>
+              <circle class="draw-stroke" cx="116" cy="118" r="14" fill="#064E3B" stroke="#34D399" stroke-width="2.2"/>
+              <path class="draw-stroke" d="M110 118L114.2 122.2L122.5 113.8" stroke="#6EE7B7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+
+          <h2>Official Correspondence, Certificates &amp; Cryptographic Registers</h2>
+          <p>Purpose-built for Principals &amp; School Offices — bilingual English &amp; हिंदी drafting, sequential Reference Numbering, batch certificates, and offline AI OCR.</p>
+        </div>
+
+        <div class="auth-cap-grid">
+          <div class="auth-cap-pill"><span data-icon="Lock" data-icon-size="15"></span><span>Scrypt + CSRF Vault</span></div>
+          <div class="auth-cap-pill"><span data-icon="QrCode" data-icon-size="15"></span><span>HMAC-SHA256 QR Seal</span></div>
+          <div class="auth-cap-pill"><span data-icon="Languages" data-icon-size="15"></span><span>20+ EN / हिंदी Formats</span></div>
+          <div class="auth-cap-pill"><span data-icon="ScanLine" data-icon-size="15"></span><span>100% Offline OCR</span></div>
         </div>
       </div>
 
-      <form id="loginForm" class="auth-form" hidden>
-        <h2>Sign In / कार्यालय लॉगिन</h2>
-        <p class="mut">Authorized Principal &amp; Office Staff Only · केवल अधिकृत उपयोगकर्ता</p>
-        <label>Username (यूज़रनेम)
-          <input id="loginUser" autocomplete="username" required placeholder="e.g. admin">
-        </label>
-        <label>Password (पासवर्ड)
-          <input id="loginPass" type="password" autocomplete="current-password" required placeholder="••••••••">
-        </label>
-        <div id="loginErr" class="auth-err" hidden></div>
-        <button type="submit" class="pri auth-btn">🔐 Sign In Securely</button>
-        <div style="text-align:center;margin-top:8px">
-          <a href="verify.html" target="_blank" style="font-size:12.5px;color:#2563eb;text-decoration:none">🛡 Verify an Issued Certificate / QR Code →</a>
+      <!-- Right Authentication Card -->
+      <div class="auth-card">
+        <div class="auth-brand">
+          <div class="auth-logo"><span data-icon="Building2" data-icon-size="24"></span></div>
+          <div>
+            <h1 id="authSchoolName">CM School of Excellence Girls' Dumka</h1>
+            <p>Letter Draft Assistant v3.0 · Official School Operating System</p>
+          </div>
         </div>
-      </form>
 
-      <form id="setupForm" class="auth-form" hidden>
-        <h2>First-Time Administrator Setup / प्रथम सेटअप</h2>
-        <p class="mut">Create the master Principal / Administrator account to lock and protect all school records, stamps, and registers.</p>
-        <label>Full Name &amp; Designation (पूरा नाम व पदनाम)
-          <input id="setupDisplay" required placeholder="e.g. Mrs. Sumita Tudu (Principal)">
-        </label>
-        <label>Admin Username (यूज़रनेम)
-          <input id="setupUser" autocomplete="username" required placeholder="admin">
-        </label>
-        <label>Strong Password (कम से कम 8 अक्षर)
-          <input id="setupPass" type="password" autocomplete="new-password" minlength="8" required placeholder="Minimum 8 characters">
-        </label>
-        <label>Confirm Password (पासवर्ड दोबारा लिखें)
-          <input id="setupPass2" type="password" autocomplete="new-password" minlength="8" required placeholder="Re-enter password">
-        </label>
-        <div id="setupErr" class="auth-err" hidden></div>
-        <button type="submit" class="pri auth-btn">🛡 Create Admin &amp; Lock System</button>
-      </form>
+        <form id="loginForm" class="auth-form" hidden>
+          <h2>Sign In / कार्यालय लॉगिन</h2>
+          <p class="mut" style="margin-bottom:14px">Authorized Principal &amp; Office Staff Only · केवल अधिकृत उपयोगकर्ता</p>
+          <label>Username (यूज़रनेम)
+            <input id="loginUser" autocomplete="username" required placeholder="e.g. admin">
+          </label>
+          <label>Password (पासवर्ड)
+            <input id="loginPass" type="password" autocomplete="current-password" required placeholder="••••••••">
+          </label>
+          <div id="loginErr" class="auth-err" hidden></div>
+          <button type="submit" class="pri auth-btn"><span data-icon="Lock" data-icon-size="16"></span> Sign In Securely</button>
+          <div style="text-align:center;margin-top:12px">
+            <a href="verify.html" target="_blank" style="font-size:12.5px;color:#1d4ed8;font-weight:600;text-decoration:none">
+              <span data-icon="ShieldCheck" data-icon-size="14"></span> Verify an Issued Certificate / QR Code →
+            </a>
+          </div>
+        </form>
 
-      <div class="auth-foot">
-        <span>🔒 Scrypt + CSRF + HMAC-SHA256 QR</span>
-        <span>📴 100% Offline Ready (PC / LAN / PWA)</span>
+        <form id="setupForm" class="auth-form" hidden>
+          <h2>First-Time Administrator Setup / प्रथम सेटअप</h2>
+          <p class="mut" style="margin-bottom:12px">Create the master Principal / Administrator account to lock and protect all school records, stamps, and registers.</p>
+          <label>Full Name &amp; Designation (पूरा नाम व पदनाम)
+            <input id="setupDisplay" required placeholder="e.g. Mrs. Sumita Tudu (Principal)">
+          </label>
+          <label>Admin Username (यूज़रनेम)
+            <input id="setupUser" autocomplete="username" required placeholder="admin">
+          </label>
+          <label>Strong Password (कम से कम 8 अक्षर)
+            <input id="setupPass" type="password" autocomplete="new-password" minlength="8" required placeholder="Minimum 8 characters">
+          </label>
+          <label>Confirm Password (पासवर्ड दोबारा लिखें)
+            <input id="setupPass2" type="password" autocomplete="new-password" minlength="8" required placeholder="Re-enter password">
+          </label>
+          <div id="setupErr" class="auth-err" hidden></div>
+          <button type="submit" class="pri auth-btn"><span data-icon="ShieldCheck" data-icon-size="16"></span> Create Admin &amp; Lock System</button>
+        </form>
+
+        <div class="auth-foot">
+          <span><span data-icon="ShieldCheck" data-icon-size="13"></span> Scrypt + CSRF + HMAC QR</span>
+          <span><span data-icon="Sparkles" data-icon-size="13"></span> Offline Ready (LAN / PWA)</span>
+        </div>
       </div>
+
     </div>
   </div>
 
@@ -68,38 +122,61 @@
   <div id="appShell" hidden>
     <header id="topbar" class="noprint">
       <div class="brand">
-        <strong>📜 Letter Draft Assistant <span class="vtag">v3.0</span></strong>
+        <span class="brand-mark"><span data-icon="Building2" data-icon-size="18"></span></span>
+        <strong>Letter Draft Assistant <span class="vtag">v3.0</span></strong>
         <span id="schoolTag"></span>
       </div>
       <div class="top-right">
-        <button id="pwaInstallBtn" class="sm ok" hidden title="Install as Desktop / Mobile App">📲 Install App</button>
-        <a href="verify.html" target="_blank" class="btn-link sm" title="Public QR Document Verification Portal">🛡 Verify QR</a>
-        <span id="syncPill" class="pill-info" title="Master Excel Register Auto-Saved">📊 Excel Synced</span>
+        <button id="cmdBtn" type="button" class="cmd-trigger" title="Quick Jump to Any Template, Letter or Action (Ctrl+K)">
+          <span data-icon="Search" data-icon-size="14"></span>
+          <span>Quick Jump…</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+        <button id="pwaInstallBtn" class="sm ok" hidden title="Install as Desktop / Mobile App">
+          <span data-icon="Smartphone" data-icon-size="14"></span> Install App
+        </button>
+        <a href="verify.html" target="_blank" class="btn-link" title="Public QR Document Verification Portal">
+          <span data-icon="ShieldCheck" data-icon-size="14"></span> Verify QR
+        </a>
+        <span id="syncPill" class="pill-info" title="Master 4-Sheet Register Auto-Synced">
+          <span class="sync-dot"></span> Register Synced
+        </span>
+        <button id="themeToggleBtn" type="button" class="icon-top-btn" title="Toggle Light / Dark Workspace"></button>
         <div class="user-badge">
           <span id="userLabel"></span>
-          <button id="acctBtn" class="sm" title="Change Password">🔑</button>
-          <button id="logoutBtn" class="sm danger" title="Sign Out">Sign Out</button>
+          <button id="acctBtn" class="sm" title="Change Password"><span data-icon="KeyRound" data-icon-size="13"></span></button>
+          <button id="logoutBtn" class="sm danger" title="Sign Out"><span data-icon="LogOut" data-icon-size="13"></span> Sign Out</button>
         </div>
       </div>
     </header>
 
     <div id="shell">
-      <nav id="nav" class="noprint">
-        <button data-v="dash">📊 Dashboard</button>
-        <button data-v="edit">✍️ Draft Letter</button>
-        <button data-v="approve">✅ Approval Queue <span id="apprBadge" class="nbadge" hidden>0</span></button>
-        <button data-v="batch">⚡ Bulk Mail-Merge</button>
-        <button data-v="dir">🎓 Master Directory</button>
-        <button data-v="sheet">📑 Sheet &amp; Search</button>
-        <button data-v="out">📤 Outward Register</button>
-        <button data-v="inw">📥 Inward + OCR <span id="inwAlertBadge" class="nbadge warn" hidden>0</span></button>
-        <button data-v="analytics">📈 Analytics &amp; Audit</button>
-        <button data-v="tpl">🧩 Templates</button>
-        <button data-v="users" id="navUsers">👥 Users &amp; Security</button>
-        <button data-v="set">⚙️ Settings</button>
+      <nav id="nav" class="noprint" aria-label="Primary Workspace Navigation">
+        <div id="navIndicator" aria-hidden="true"></div>
+
+        <div class="nav-sec-label">Overview &amp; Studio</div>
+        <button data-v="dash"><span class="nav-lbl"><span data-icon="LayoutDashboard"></span> Dashboard</span></button>
+        <button data-v="edit"><span class="nav-lbl"><span data-icon="FilePenLine"></span> Draft Letter</span></button>
+        <button data-v="approve"><span class="nav-lbl"><span data-icon="CheckCircle2"></span> Approval Queue</span> <span id="apprBadge" class="nbadge" hidden>0</span></button>
+        <button data-v="batch"><span class="nav-lbl"><span data-icon="Layers"></span> Bulk Mail-Merge</span></button>
+        <button data-v="tpl"><span class="nav-lbl"><span data-icon="LayoutTemplate"></span> Templates</span></button>
+
+        <div class="nav-sec-label">Registers &amp; AI OCR</div>
+        <button data-v="dir"><span class="nav-lbl"><span data-icon="GraduationCap"></span> Master Directory</span></button>
+        <button data-v="sheet"><span class="nav-lbl"><span data-icon="Table2"></span> Sheet &amp; Search</span></button>
+        <button data-v="out"><span class="nav-lbl"><span data-icon="Send"></span> Outward Register</span></button>
+        <button data-v="inw"><span class="nav-lbl"><span data-icon="Inbox"></span> Inward + OCR</span> <span id="inwAlertBadge" class="nbadge warn" hidden>0</span></button>
+
+        <div class="nav-sec-label">Governance</div>
+        <button data-v="analytics"><span class="nav-lbl"><span data-icon="BarChart3"></span> Analytics &amp; Audit</span></button>
+        <button data-v="users" id="navUsers"><span class="nav-lbl"><span data-icon="Users"></span> Users &amp; Security</span></button>
+        <button data-v="set"><span class="nav-lbl"><span data-icon="Settings"></span> Settings</span></button>
+
         <div class="nav-foot">
-          <div>Next Ref: <b id="nextRef">—</b></div>
-          <div id="bakStatus"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span>Next Ref:</span> <b id="nextRef">—</b>
+          </div>
+          <div id="bakStatus" style="margin-top:4px;font-size:11.5px"></div>
         </div>
       </nav>
       <main id="view"></main>
@@ -111,11 +188,15 @@
 
   <script src="vendor/fuse.js"></script>
   <script src="vendor/signature_pad.js"></script>
+  <script src="vendor/anime.js"></script>
+  <script src="vendor/auto-animate.js"></script>
+  <script src="vendor/icons.js"></script>
   <script src="core.js"></script>
   <script src="static-vault.js"></script>
   <script src="templates.js"></script>
   <script src="krutidev-client.js"></script>
   <script src="phrasebook.js"></script>
+  <script src="motion-ui.js"></script>
   <script src="modules-ui.js"></script>
   <script src="app.js"></script>
 </body>
