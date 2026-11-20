@@ -1,9 +1,11 @@
 /* KrutiDev-010 to Unicode Devanagari Converter (Shared Browser + Node)
    Eliminates legacy non-Unicode Hindi font issues when pasting from older Word documents. */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.KrutiDev = factory();
-})(typeof self !== 'undefined' ? self : this, function () {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  root.KrutiDev = api;
+  root.krutidevToUnicode = api.toUnicode;
+})(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
   const PAIRS = [

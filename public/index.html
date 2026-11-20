@@ -3,74 +3,119 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Letter Draft Assistant — सुरक्षित पत्र-प्रारूप एवं पंजी प्रणाली</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E%3Crect width=%2724%27 height=%2724%27 rx=%275%27 fill=%27%231f3a5f%27/%3E%3Ctext x=%274%27 y=%2717%27 font-size=%2714%27 fill=%27%23fff%27%3E✉%3C/text%3E%3C/svg%3E">
+  <meta name="theme-color" content="#162d4c">
+  <title>Letter Draft Assistant v3.0 — Official School Operating System</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Mandatory Authentication / Setup Gate -->
-  <div id="authScreen" class="auth-screen">
-    <div class="auth-card" id="authCard">
+
+  <!-- ==================== SECURE AUTHENTICATION GATE ==================== -->
+  <div id="authGate" class="auth-gate">
+    <div class="auth-card">
       <div class="auth-brand">
-        <div class="auth-logo">✉</div>
+        <div class="auth-logo">📜</div>
         <div>
-          <h1>Letter Draft Assistant</h1>
-          <p>सुरक्षित कार्यालयी पत्र-प्रारूप एवं जावक/आवक पंजी प्रणाली</p>
+          <h1 id="authSchoolName">CM School of Excellence Girls' Dumka</h1>
+          <p>Letter Draft Assistant v3.0 · Secure School Correspondence &amp; Certificate OS</p>
         </div>
       </div>
-      <div id="authBody"><p class="mut" style="text-align:center;padding:18px 0">Verifying security status…</p></div>
+
+      <form id="loginForm" class="auth-form" hidden>
+        <h2>Sign In / कार्यालय लॉगिन</h2>
+        <p class="mut">Authorized Principal &amp; Office Staff Only · केवल अधिकृत उपयोगकर्ता</p>
+        <label>Username (यूज़रनेम)
+          <input id="loginUser" autocomplete="username" required placeholder="e.g. admin">
+        </label>
+        <label>Password (पासवर्ड)
+          <input id="loginPass" type="password" autocomplete="current-password" required placeholder="••••••••">
+        </label>
+        <div id="loginErr" class="auth-err" hidden></div>
+        <button type="submit" class="pri auth-btn">🔐 Sign In Securely</button>
+        <div style="text-align:center;margin-top:8px">
+          <a href="/verify" target="_blank" style="font-size:12.5px;color:#2563eb;text-decoration:none">🛡 Verify an Issued Certificate / QR Code →</a>
+        </div>
+      </form>
+
+      <form id="setupForm" class="auth-form" hidden>
+        <h2>First-Time Administrator Setup / प्रथम सेटअप</h2>
+        <p class="mut">Create the master Principal / Administrator account to lock and protect all school records, stamps, and registers.</p>
+        <label>Full Name &amp; Designation (पूरा नाम व पदनाम)
+          <input id="setupDisplay" required placeholder="e.g. Mrs. Sumita Tudu (Principal)">
+        </label>
+        <label>Admin Username (यूज़रनेम)
+          <input id="setupUser" autocomplete="username" required placeholder="admin">
+        </label>
+        <label>Strong Password (कम से कम 8 अक्षर)
+          <input id="setupPass" type="password" autocomplete="new-password" minlength="8" required placeholder="Minimum 8 characters">
+        </label>
+        <label>Confirm Password (पासवर्ड दोबारा लिखें)
+          <input id="setupPass2" type="password" autocomplete="new-password" minlength="8" required placeholder="Re-enter password">
+        </label>
+        <div id="setupErr" class="auth-err" hidden></div>
+        <button type="submit" class="pri auth-btn">🛡 Create Admin &amp; Lock System</button>
+      </form>
+
       <div class="auth-foot">
-        <span>🔒 Scrypt Encrypted</span>
-        <span>•</span>
-        <span>🛡 Role-Based Access</span>
-        <span>•</span>
-        <span>📄 DOCX · PDF · XLSX</span>
+        <span>🔒 Scrypt + CSRF + HMAC-SHA256 QR</span>
+        <span>📴 100% Offline Ready (PC / LAN / PWA)</span>
       </div>
     </div>
   </div>
 
-  <!-- Main Protected Application Shell -->
-  <div id="app" style="display:none">
-    <header>
+  <!-- ==================== PROTECTED APPLICATION SHELL ==================== -->
+  <div id="appShell" hidden>
+    <header id="topbar" class="noprint">
       <div class="brand">
-        <span class="brand-icon">✉</span>
-        <div>
-          <div class="brand-title">Letter Draft Assistant</div>
-          <small id="brandSub">पत्र-व्यवस्था एवं मदवार पंजी</small>
+        <strong>📜 Letter Draft Assistant <span class="vtag">v3.0</span></strong>
+        <span id="schoolTag"></span>
+      </div>
+      <div class="top-right">
+        <button id="pwaInstallBtn" class="sm ok" hidden title="Install as Desktop / Mobile App">📲 Install App</button>
+        <a href="/verify" target="_blank" class="btn-link sm" title="Public QR Document Verification Portal">🛡 Verify QR</a>
+        <span id="syncPill" class="pill-info" title="Master Excel Register Auto-Saved">📊 Excel Synced</span>
+        <div class="user-badge">
+          <span id="userLabel"></span>
+          <button id="acctBtn" class="sm" title="Change Password">🔑</button>
+          <button id="logoutBtn" class="sm danger" title="Sign Out">Sign Out</button>
         </div>
-      </div>
-
-      <div class="cmdwrap">
-        <input id="cmd" placeholder='Quick Command (Ctrl+K):  n bon.hi name="Anita" cls=XII  |  head STD  |  help' autocomplete="off" spellcheck="false">
-        <div id="sug"></div>
-      </div>
-
-      <div class="hdr-right">
-        <span id="userBadge" class="user-badge"></span>
-        <button id="btnLogout" class="hdr-btn" title="Sign Out (लॉगआउट)">⏻ Logout</button>
       </div>
     </header>
 
-    <nav id="sideNav">
-      <button data-v="home">🏠 Dashboard <small>मुख्य पटल</small></button>
-      <button data-v="editor">✍ Draft Letter <small>पत्र प्रारूपण</small></button>
-      <button data-v="out">📊 Sheet &amp; Search <small>जावक पंजी व मद खोज</small></button>
-      <button data-v="inw">📥 Inward Register <small>आवक पंजी</small></button>
-      <button data-v="sync">☁ Google &amp; Excel <small>शीट सिंक व डाउनलोड</small></button>
-      <button data-v="sec">🔐 Users &amp; Security <small>सुरक्षा एवं लॉगिन</small></button>
-      <button data-v="set">⚙ Settings &amp; Deploy <small>सेटिंग व होस्टिंग</small></button>
-    </nav>
-
-    <main id="main"></main>
+    <div id="shell">
+      <nav id="nav" class="noprint">
+        <button data-v="dash">📊 Dashboard</button>
+        <button data-v="edit">✍️ Draft Letter</button>
+        <button data-v="approve">✅ Approval Queue <span id="apprBadge" class="nbadge" hidden>0</span></button>
+        <button data-v="batch">⚡ Bulk Mail-Merge</button>
+        <button data-v="dir">🎓 Master Directory</button>
+        <button data-v="sheet">📑 Sheet &amp; Search</button>
+        <button data-v="out">📤 Outward Register</button>
+        <button data-v="inw">📥 Inward + OCR <span id="inwAlertBadge" class="nbadge warn" hidden>0</span></button>
+        <button data-v="analytics">📈 Analytics &amp; Audit</button>
+        <button data-v="tpl">🧩 Templates</button>
+        <button data-v="users" id="navUsers">👥 Users &amp; Security</button>
+        <button data-v="set">⚙️ Settings</button>
+        <div class="nav-foot">
+          <div>Next Ref: <b id="nextRef">—</b></div>
+          <div id="bakStatus"></div>
+        </div>
+      </nav>
+      <main id="view"></main>
+    </div>
   </div>
 
-  <div id="printRoot"></div>
-  <dialog id="dlg"></dialog>
-  <div id="toast"></div>
+  <div id="modal" class="noprint" hidden></div>
+  <div id="toast" class="noprint" hidden></div>
 
+  <script src="vendor/fuse.js"></script>
+  <script src="vendor/signature_pad.js"></script>
   <script src="core.js"></script>
   <script src="templates.js"></script>
   <script src="krutidev-client.js"></script>
+  <script src="phrasebook.js"></script>
+  <script src="modules-ui.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

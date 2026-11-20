@@ -1,2361 +1,2053 @@
-/* Letter Draft Assistant v2.0 — Complete Secure Web App UI */
-'use strict';
+/* Letter Draft Assistant v3.0 — Main Authenticated Application Controller */
+(function () {
+  'use strict';
 
-const $ = (s, r = document) => r.querySelector(s);
-const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const fmtD = (iso) => Core.fmtDateDMY(iso);
-const clone = (o) => JSON.parse(JSON.stringify(o));
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function toast(msg, bad = false) {
-  const t = $('#toast');
-  t.textContent = String(msg || '');
-  t.className = 'show' + (bad ? ' bad' : '');
-  clearTimeout(toast.h);
-  toast.h = setTimeout(() => { t.className = ''; }, bad ? 4500 : 2400);
-}
-
-/* ---------- Authenticated Image Blob Cache (for protected api/files/*) ---------- */
-const ImageCache = {
-  map: new Map(),
-  async preloadAll(db) {
-    if (!db || !db.settings) return;
-    const urls = new Set();
-    if (db.settings.letterhead && db.settings.letterhead.startsWith('api/files/')) urls.add(db.settings.letterhead);
-    (db.settings.signatories || []).forEach(sg => {
-      if (sg.stamp && sg.stamp.startsWith('api/files/')) urls.add(sg.stamp);
-    });
-    await Promise.all([...urls].map(u => this.ensure(u)));
-  },
-  async ensure(src) {
-    if (!src || !src.startsWith('api/files/')) return src;
-    if (this.map.has(src)) return this.map.get(src);
-    try {
-      const r = await apiFetch(src);
-      if (!r.ok) return '';
-      const blob = await r.blob();
-      const objUrl = URL.createObjectURL(blob);
-      this.map.set(src, objUrl);
-      return objUrl;
-    } catch (_) {
-      return '';
-    }
-  },
-  resolve(src) {
-    const clean = Core.sanitizeImageSrc(src, '');
-    if (!clean) return '';
-    if (clean.startsWith('api/files/')) return this.map.get(clean) || '';
-    return clean;
-  },
-  clear() {
-    for (const u of this.map.values()) {
-      try { URL.revokeObjectURL(u); } catch (_) {}
-    }
-    this.map.clear();
-  },
-};
-
-/* ---------- Secure API Client (Cookie + Session Header + CSRF) ---------- */
-const Session = {
-  user: null,
-  csrfToken: null,
-  token: sessionStorage.getItem('lda_token') || null,
-  set(data) {
-    this.user = data.user || null;
-    this.csrfToken = data.csrfToken || this.csrfToken;
-    if (data.sessionToken) {
-      this.token = data.sessionToken;
-      try { sessionStorage.setItem('lda_token', data.sessionToken); } catch (_) {}
-    }
-  },
-  clear() {
-    this.user = null;
-    this.csrfToken = null;
-    this.token = null;
-    try { sessionStorage.removeItem('lda_token'); } catch (_) {}
-    ImageCache.clear();
-  },
-  can(perm) {
-    if (!this.user) return false;
-    if (this.user.role === 'admin') return true;
-    if (this.user.role === 'staff') return perm === 'read' || perm === 'write';
-    if (this.user.role === 'viewer') return perm === 'read';
-    return false;
-  },
-};
-
-async function apiFetch(url, opts = {}) {
-  const headers = Object.assign({}, opts.headers || {});
-  if (Session.token) headers['x-session-token'] = Session.token;
-  if (Session.csrfToken && opts.method && opts.method !== 'GET' && opts.method !== 'HEAD') {
-    headers['x-csrf-token'] = Session.csrfToken;
-  }
-  return fetch(url, Object.assign({ credentials: 'same-origin', cache: 'no-store' }, opts, { headers }));
-}
-
-async function apiJson(url, opts = {}) {
-  const headers = Object.assign({ 'content-type': 'application/json' }, opts.headers || {});
-  const res = await apiFetch(url, Object.assign({}, opts, { headers }));
-  const data = await res.json().catch(() => ({ ok: false, error: 'Unexpected server response.' }));
-  if (res.status === 401 && !url.includes('api/auth/')) {
-    Session.clear();
-    showAuthGate();
-    throw new Error('Session expired. Please sign in again.');
-  }
-  if (!res.ok || data.ok === false) {
-    throw new Error(data.error || `Request failed (${res.status})`);
-  }
-  return data;
-}
-
-async function downloadFromApi(url, postBody, fallbackName) {
-  try {
-    toast('Generating file… (फ़ाइल तैयार हो रही है…)');
-    const opts = postBody
-      ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(postBody) }
-      : { method: 'GET' };
-    const res = await apiFetch(url, opts);
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || `Export failed (${res.status})`);
-    }
-    const blob = await res.blob();
-    let filename = fallbackName || 'download';
-    const cd = res.headers.get('content-disposition') || '';
-    const mUtf = /filename\*=UTF-8''([^;]+)/i.exec(cd);
-    const mStd = /filename="([^"]+)"/i.exec(cd);
-    if (mUtf) filename = decodeURIComponent(mUtf[1]);
-    else if (mStd) filename = mStd[1];
-
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    toast('Downloaded: ' + filename);
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
-/* ---------- Store ---------- */
-const Store = {
-  db: null,
-  serverInfo: {},
-  async reload() {
-    const j = await apiJson('api/db');
-    this.db = Core.migrate(j.db);
-    this.serverInfo = j.serverInfo || {};
-    await ImageCache.preloadAll(this.db);
-    const sub = $('#brandSub');
-    if (sub && this.db.settings && this.db.settings.school) {
-      sub.textContent = this.db.settings.school.en || this.db.settings.school.name;
-    }
-  },
-  async op(name, payload) {
-    const j = await apiJson('api/op', { method: 'POST', body: JSON.stringify({ name, payload }) });
-    this.merge(name, j.result, j.counters);
-    if (name === 'saveSettings') await ImageCache.preloadAll(this.db);
-    return j.result;
-  },
-  merge(name, res, counters) {
-    const db = this.db;
-    const up = (arr, x) => { const i = arr.findIndex(y => y.id === x.id); if (i < 0) arr.push(x); else arr[i] = x; };
-    if (counters) db.counters = counters;
-    if (['saveLetter', 'issueLetter', 'patchLetter', 'cancelLetter'].includes(name)) up(db.letters, res);
-    if (name === 'issueLetter' && res.replyTo) this.reload();
-    if (name === 'deleteLetter') db.letters = db.letters.filter(x => x.id !== res.id);
-    if (name === 'saveInward') up(db.inward, res);
-    if (name === 'deleteInward') db.inward = db.inward.filter(x => x.id !== res.id);
-    if (name === 'saveSettings' || name === 'markBackup') db.settings = res;
-    if (name === 'saveCustomTemplate' || name === 'deleteCustomTemplate') db.customTemplates = res;
-    if (name === 'restore') this.reload();
-  },
-};
-
-/* ---------- Modal Dialog Helper ---------- */
-function ask(title, fields, okLabel = 'OK') {
-  return new Promise(resolve => {
-    const d = $('#dlg');
-    d.innerHTML = `<form method="dialog">
-      <h3>${esc(title)}</h3>
-      ${fields.map(f => {
-        if (f.type === 'info') return `<p class="mut">${esc(f.l)}</p>`;
-        if (f.type === 'select') {
-          return `<label>${esc(f.l)}<select name="${esc(f.k)}">${(f.opts || []).map(o => {
-            const val = typeof o === 'object' ? o.v : o;
-            const lbl = typeof o === 'object' ? o.l : o;
-            return `<option value="${esc(val)}" ${String(f.v || '') === String(val) ? 'selected' : ''}>${esc(lbl)}</option>`;
-          }).join('')}</select></label>`;
-        }
-        return `<label>${esc(f.l)}${
-          f.type === 'area'
-            ? `<textarea name="${esc(f.k)}" rows="3" placeholder="${esc(f.ph || '')}">${esc(f.v || '')}</textarea>`
-            : `<input name="${esc(f.k)}" type="${esc(f.type || 'text')}" value="${esc(f.v || '')}" placeholder="${esc(f.ph || '')}" autocomplete="off">`
-        }</label>`;
-      }).join('')}
-      <div class="row end">
-        <button value="x" class="ghost" formnovalidate>Cancel (रद्द करें)</button>
-        <button value="ok" class="pri">${esc(okLabel)}</button>
-      </div>
-    </form>`;
-    const done = v => { d.onclose = null; resolve(v); };
-    d.onclose = () => {
-      if (d.returnValue !== 'ok') return done(null);
-      const out = {};
-      $$('input,textarea,select', d).forEach(el => { out[el.name] = el.value; });
-      done(out);
-    };
-    d.returnValue = '';
-    if (!d.open) d.showModal();
-    const first = $('input,textarea,select', d);
-    if (first) first.focus();
-  });
-}
-
-/* ---------- Auth / Login / Setup Screen ---------- */
-async function showAuthGate() {
-  $('#app').style.display = 'none';
-  $('#authScreen').style.display = 'flex';
-  const box = $('#authBody');
-  try {
-    const st = await apiJson('api/auth/status');
-    if (st.authenticated && st.user) {
-      Session.set(st);
-      return enterApp();
-    }
-    if (st.needsSetup) renderSetupForm(box);
-    else renderLoginForm(box);
-  } catch (e) {
-    box.innerHTML = `<div class="auth-err">Server unreachable: ${esc(e.message)}</div>`;
-  }
-}
-
-function renderSetupForm(box, errMsg = '') {
-  box.innerHTML = `
-    <div class="auth-info">
-      <b>प्रथम बार सेटअप (First-Time Admin Setup):</b><br>
-      अनधिकृत एक्सेस रोकने हेतु अपना मुख्य एडमिन (प्राचार्य/प्रशासक) खाता बनाएँ।
-    </div>
-    ${errMsg ? `<div class="auth-err">${esc(errMsg)}</div>` : ''}
-    <form id="setupForm">
-      <label>Admin Username (यूज़रनेम — जैसे <code>admin</code> या <code>principal</code>)
-        <input name="username" required minlength="3" maxlength="32" value="admin" autocomplete="username">
-      </label>
-      <label>Full Name &amp; Designation (पूरा नाम व पदनाम)
-        <input name="displayName" required placeholder="Mrs. Sumita Tudu (Principal)" value="Administrator">
-      </label>
-      <label>Strong Password (सुरक्षित पासवर्ड — कम से कम 8 अक्षर)
-        <input name="password" type="password" required minlength="8" placeholder="Minimum 8 characters" autocomplete="new-password">
-      </label>
-      <label>Confirm Password (पासवर्ड दोबारा लिखें)
-        <input name="confirm" type="password" required minlength="8" placeholder="Re-enter password" autocomplete="new-password">
-      </label>
-      <button type="submit" class="pri" style="width:100%;justify-content:center;padding:10px;margin-top:6px">
-        🔐 Create Admin &amp; Launch System
-      </button>
-    </form>`;
-  $('#setupForm').onsubmit = async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const pw = fd.get('password');
-    if (pw !== fd.get('confirm')) {
-      return renderSetupForm(box, 'Passwords do not match (दोनों पासवर्ड समान नहीं हैं).');
-    }
-    try {
-      const res = await apiJson('api/auth/setup', {
-        method: 'POST',
-        body: JSON.stringify({
-          username: fd.get('username'),
-          displayName: fd.get('displayName'),
-          password: pw,
-        }),
-      });
-      Session.set(res);
-      toast('Admin account created! Welcome.');
-      enterApp();
-    } catch (err) {
-      renderSetupForm(box, err.message);
-    }
+  const LBL = {
+    en: { to: 'To,', subj: 'Subject:', ref: 'Ref. No.:', date: 'Date:', encl: 'Enclosure(s):', cc: 'Copy forwarded to:', head: 'Major Head / File:' },
+    hi: { to: 'सेवा में,', subj: 'विषय:', ref: 'पत्रांक:', date: 'दिनांक:', encl: 'संलग्नक:', cc: 'प्रतिलिपि सूचनार्थ एवं आवश्यक कार्यार्थ:', head: 'मद / संचिका:' },
   };
-}
 
-function renderLoginForm(box, errMsg = '') {
-  box.innerHTML = `
-    <div class="auth-info">
-      अधिकृत कार्यालय लॉगिन (Authorized Personnel Only)। कृपया अपना यूज़रनेम और पासवर्ड दर्ज करें।
-    </div>
-    ${errMsg ? `<div class="auth-err">${esc(errMsg)}</div>` : ''}
-    <form id="loginForm">
-      <label>Username (यूज़रनेम)
-        <input name="username" required autocomplete="username" placeholder="Enter username">
-      </label>
-      <label>Password (पासवर्ड)
-        <input name="password" type="password" required autocomplete="current-password" placeholder="Enter password">
-      </label>
-      <label class="chk" style="margin:6px 0 12px">
-        <input name="remember" type="checkbox"> Keep signed in on this trusted PC (7 days)
-      </label>
-      <button type="submit" class="pri" style="width:100%;justify-content:center;padding:10px">
-        🔓 Sign In (सुरक्षित लॉगिन करें)
-      </button>
-    </form>`;
-  const uInput = $('input[name="username"]', box);
-  if (uInput) uInput.focus();
+  let auth = { authenticated: false, user: null, csrfToken: null };
+  let db = null;
+  let curView = 'dash';
+  let ed = null;
+  let activeFocusField = null;
+  let phoneticMode = false;
+  let activeSpeechRec = null;
+  let cachedQrMap = {};
+  let deferredPwaPrompt = null;
+
+  const outF = { q: '', year: '', status: '', majorHead: '' };
+  const sheetF = { q: '', year: '', status: '', majorHead: '', fuzzy: true };
+  const inwF = { q: '', status: '', majorHead: '', priority: '' };
+
+  function toast(msg, ms = 3200) {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { t.hidden = true; }, ms);
+  }
+
+  function modal(html) {
+    const m = $('#modal');
+    m.innerHTML = `<div class="box">${html}</div>`;
+    m.hidden = false;
+    m.onclick = e => { if (e.target === m) closeModal(); };
+  }
+  function closeModal() { $('#modal').hidden = true; }
+
+  // ==================== PWA SERVICE WORKER & INSTALL BUTTON ====================
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPwaPrompt = e;
+    const btn = $('#pwaInstallBtn');
+    if (btn) btn.hidden = false;
+  });
+  if ($('#pwaInstallBtn')) {
+    $('#pwaInstallBtn').onclick = async () => {
+      if (!deferredPwaPrompt) return;
+      deferredPwaPrompt.prompt();
+      await deferredPwaPrompt.userChoice;
+      deferredPwaPrompt = null;
+      $('#pwaInstallBtn').hidden = true;
+    };
+  }
+
+  // ==================== API & BINARY DOWNLOAD HELPERS ====================
+  async function api(url, body, method) {
+    const m = method || (body !== undefined ? 'POST' : 'GET');
+    const headers = {};
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (auth.csrfToken && m !== 'GET') headers['X-CSRF-Token'] = auth.csrfToken;
+
+    const r = await fetch(url, {
+      method: m,
+      headers,
+      credentials: 'same-origin',
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 401 && auth.authenticated) {
+      auth = { authenticated: false, user: null, csrfToken: null };
+      showAuthGate(false);
+      throw new Error(d.error || 'Session expired. Please sign in again.');
+    }
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    return d;
+  }
+
+  async function op(name, payload) {
+    const r = await api('/api/op', { op: name, payload });
+    db = r.db;
+    refreshChrome();
+    return r.result;
+  }
+
+  async function reloadDb() {
+    db = await api('/api/db');
+    refreshChrome();
+    return db;
+  }
+
+  async function downloadBinary(url, method, body, fallbackName) {
+    try {
+      toast('Generating file… कृपया प्रतीक्षा करें');
+      const headers = {};
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      if (auth.csrfToken && method !== 'GET') headers['X-CSRF-Token'] = auth.csrfToken;
+      const r = await fetch(url, {
+        method,
+        headers,
+        credentials: 'same-origin',
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error || 'Download failed');
+      }
+      const blob = await r.blob();
+      let filename = fallbackName;
+      const cd = r.headers.get('content-disposition') || '';
+      const m = /filename="([^"]+)"/.exec(cd);
+      if (m) filename = m[1];
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+      toast(`Downloaded ${filename}`);
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+
+  // ==================== SHARED MODULE CONTEXT ====================
+  function makeUiCtx() {
+    return {
+      get db() { return db; },
+      get auth() { return auth; },
+      api,
+      op,
+      reloadDb,
+      downloadBinary,
+      toast,
+      modal,
+      closeModal,
+      allTemplates,
+      openLetter: (id) => {
+        const found = db.letters.find(x => x.id === id);
+        if (found) { ed = JSON.parse(JSON.stringify(found)); go('edit'); }
+      },
+      buildLetterFromTemplateFields: (tpl, lang, fields, extra = {}) => {
+        const l = {
+          id: Core.uid(),
+          tpl: tpl.id,
+          lang,
+          layout: tpl.layout,
+          majorHead: extra.majorHead || tpl.majorHead || Core.inferMajorHead(tpl.id),
+          subHead: extra.subHead || '',
+          date: Core.todayISO(),
+          sig: db.settings.defaultSignatory,
+          showSign: extra.showSign !== undefined ? extra.showSign : db.settings.defaultShowSign,
+          showQr: extra.showQr !== undefined ? extra.showQr : db.settings.defaultShowQr,
+          fields: Object.assign({}, fields),
+          encl: '',
+          cc: '',
+          status: 'draft',
+        };
+        applyTemplate(l);
+        return l;
+      },
+      startLetterForPerson: (person, kind, tplId) => {
+        const lang = 'en';
+        const l = newFromTemplate(tplId || (kind === 'staff' ? 'exp' : 'bon'), lang);
+        const mapped = window.ModulesUI.mapPersonToFields(person, kind, lang, {
+          purpose: 'Official / Scholarship / Academic Use',
+          session: Core.sessionFromISO(Core.todayISO()),
+        });
+        l.fields = Object.assign(l.fields || {}, mapped);
+        l.personRef = { type: kind === 'staff' ? 'staff' : 'student', id: person.id, code: person.admNo || person.empId || '', name: person.name };
+        applyTemplate(l);
+        ed = l;
+        go('edit');
+      },
+    };
+  }
+
+  // ==================== AUTHENTICATION GATE ====================
+  async function checkAuthAndBoot() {
+    try {
+      const st = await fetch('/api/auth/status', { credentials: 'same-origin' }).then(r => r.json());
+      if (st.schoolName) $('#authSchoolName').textContent = st.schoolName;
+      if (st.authenticated) {
+        auth = { authenticated: true, user: st.user, csrfToken: st.csrfToken };
+        await enterApp();
+      } else {
+        showAuthGate(st.setupRequired);
+      }
+    } catch (_) {
+      showAuthGate(false);
+    }
+  }
+
+  function showAuthGate(setupRequired) {
+    $('#appShell').hidden = true;
+    $('#authGate').hidden = false;
+    $('#setupForm').hidden = !setupRequired;
+    $('#loginForm').hidden = !!setupRequired;
+  }
+
   $('#loginForm').onsubmit = async (e) => {
     e.preventDefault();
-    const fd = new FormData(e.target);
+    const errBox = $('#loginErr');
+    errBox.hidden = true;
     try {
-      const res = await apiJson('api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({
-          username: fd.get('username'),
-          password: fd.get('password'),
-          remember: fd.get('remember') === 'on',
-        }),
+      const r = await api('/api/auth/login', {
+        username: $('#loginUser').value.trim(),
+        password: $('#loginPass').value,
       });
-      Session.set(res);
-      toast('Signed in as ' + res.user.displayName);
-      enterApp();
+      auth = { authenticated: true, user: r.user, csrfToken: r.csrfToken };
+      $('#loginPass').value = '';
+      await enterApp();
     } catch (err) {
-      renderLoginForm(box, err.message);
+      errBox.textContent = err.message;
+      errBox.hidden = false;
     }
   };
-}
 
-async function enterApp() {
-  try {
-    await Store.reload();
-    $('#authScreen').style.display = 'none';
-    $('#app').style.display = 'grid';
-    const u = Session.user;
-    $('#userBadge').textContent = `👤 ${u.displayName} (${u.role.toUpperCase()})`;
-    go(S.view || 'home', S.cur);
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
-/* ---------- Letter Model & Accurate Placeholder Engine ---------- */
-const allTemplates = () => Tpl.allList(Store.db && Store.db.customTemplates);
-const getTpl = (id) => Tpl.get(id, Store.db && Store.db.customTemplates);
-
-const LBL = {
-  en: { to: 'To,', subj: 'Subject:', ref: 'Ref. No.:', date: 'Date:', encl: 'Enclosure(s):', cc: 'Copy forwarded to:', head: 'Major Head / File:' },
-  hi: { to: 'सेवा में,', subj: 'विषय:', ref: 'पत्रांक:', date: 'दिनांक:', encl: 'संलग्नक:', cc: 'प्रतिलिपि सूचनार्थ एवं आवश्यक कार्यार्थ:', head: 'मद / संचिका:' },
-};
-
-function defaultFields(tid, isoDate) {
-  const o = {};
-  const sess = Core.sessionFromISO(isoDate || Core.todayISO());
-  getTpl(tid).fields.forEach(f => {
-    if (f.def) o[f.k] = f.def === '__session__' ? sess : f.def;
-  });
-  return o;
-}
-
-function nextRefNow(headCode, isoDate) {
-  return Core.peekRef(Store.db, 'out', isoDate || Core.todayISO(), headCode || 'ADM');
-}
-
-function regen(l) {
-  const t = getTpl(l.tpl);
-  const c = t[l.lang] || t.en;
-  const S0 = Store.db.settings;
-  l.layout = t.layout || 'letter';
-  l.heading = c.heading || '';
-  l.salutation = c.salutation || '';
-  l.closing = c.closing || '';
-  const nx = nextRefNow(l.majorHead, l.date);
-  const ctx = Core.buildPlaceholderContext(Store.db, l, nx.ref);
-
-  if (!l.manual) {
-    l.subject = Tpl.render(c.subject, l.fields, t.fields, ctx);
-    l.body = Tpl.render(c.body, l.fields, t.fields, ctx);
-  }
-  if (!l.toManual) {
-    const r = S0.recipients.find(x => x.alias === l.rcpt);
-    l.to = r ? (r[l.lang === 'hi' ? 'hi' : 'en'] || r.en) : Tpl.render(c.to || '', l.fields, t.fields, ctx);
-  }
-}
-
-// Resolve any {{placeholder}} written manually inside Subject, Body, To, Enclosures, CC
-function resolveLiveLetter(l) {
-  const t = getTpl(l.tpl);
-  const nx = nextRefNow(l.majorHead, l.date);
-  const ctx = Core.buildPlaceholderContext(Store.db, l, nx.ref);
-  const out = clone(l);
-  out.to = Tpl.render(l.to || '', l.fields, t.fields, ctx);
-  out.heading = Tpl.render(l.heading || '', l.fields, t.fields, ctx);
-  out.subject = Tpl.render(l.subject || '', l.fields, t.fields, ctx);
-  out.salutation = Tpl.render(l.salutation || '', l.fields, t.fields, ctx);
-  out.body = Tpl.render(l.body || '', l.fields, t.fields, ctx);
-  out.closing = Tpl.render(l.closing || '', l.fields, t.fields, ctx);
-  out.encl = Tpl.render(l.encl || '', l.fields, t.fields, ctx);
-  out.cc = Tpl.render(l.cc || '', l.fields, t.fields, ctx);
-  return out;
-}
-
-function getUnfilledMarkers(l) {
-  const r = resolveLiveLetter(l);
-  const text = [r.to, r.heading, r.subject, r.body, r.encl, r.cc].join('\n');
-  const set = new Set();
-  const re = /‹([^›]+)›/g;
-  let m;
-  while ((m = re.exec(text))) set.add(m[1]);
-  return [...set];
-}
-
-function detectCustomPlaceholderKeys(l) {
-  const t = getTpl(l.tpl);
-  const known = new Set((t.fields || []).map(f => f.k));
-  const sysCtx = Core.buildPlaceholderContext(Store.db, l, '000');
-  Object.keys(sysCtx).forEach(k => known.add(k));
-  const raw = Tpl.extractPlaceholders([l.to, l.subject, l.body, l.encl, l.cc]);
-  return raw.filter(k => !known.has(k));
-}
-
-function newLetter(o = {}) {
-  const S0 = Store.db.settings;
-  const [tid, lg] = (o.tpl || 'req').split('.');
-  const tpl = allTemplates().find(t => t.id === tid) || allTemplates()[0];
-  const dt = o.date || Core.todayISO();
-  const l = {
-    id: Core.uid(),
-    status: 'draft',
-    lang: lg || o.lang || 'en',
-    tpl: tpl.id,
-    majorHead: o.majorHead || tpl.majorHead || Core.inferMajorHead(tpl.id),
-    subHead: o.subHead || '',
-    fields: Object.assign(defaultFields(tpl.id, dt), o.fields || {}),
-    rcpt: o.rcpt || '',
-    to: '',
-    subject: '',
-    body: '',
-    date: dt,
-    sig: S0.defaultSignatory,
-    showSign: !!S0.defaultShowSign,
-    encl: o.encl || '',
-    cc: o.cc || '',
-    remarks: o.remarks || '',
-    manual: false,
-    toManual: false,
-    replyTo: o.replyTo || '',
+  $('#setupForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const errBox = $('#setupErr');
+    errBox.hidden = true;
+    const p1 = $('#setupPass').value;
+    const p2 = $('#setupPass2').value;
+    if (p1 !== p2) {
+      errBox.textContent = 'Passwords do not match.';
+      errBox.hidden = false;
+      return;
+    }
+    try {
+      const r = await api('/api/auth/setup', {
+        displayName: $('#setupDisplay').value.trim(),
+        username: $('#setupUser').value.trim(),
+        password: p1,
+      });
+      auth = { authenticated: true, user: r.user, csrfToken: r.csrfToken };
+      $('#setupPass').value = '';
+      $('#setupPass2').value = '';
+      toast('Administrator account created & system locked!');
+      await enterApp();
+    } catch (err) {
+      errBox.textContent = err.message;
+      errBox.hidden = false;
+    }
   };
-  regen(l);
-  if (o.to) { l.to = o.to; l.toManual = true; }
-  if (o.subject) { l.subject = o.subject; l.manual = true; }
-  if (o.body) { l.body = o.body; l.manual = true; }
-  return l;
-}
 
-const party = (l) => ((l.to || '').split('\n')[0]) || (l.fields && (l.fields.name || l.fields.staff_name || l.fields.person_name || l.fields.title)) || '—';
-
-/* ---------- Render Letter HTML (Live Preview + Browser A4 Print) ---------- */
-function para(t, print) {
-  return esc(t)
-    .split(/\n{2,}/)
-    .map(p => '<p>' + p.replace(/\n/g, '<br>') + '</p>')
-    .join('')
-    .replace(/‹([^›]+)›/g, (_, x) => (print ? '[' + x + ']' : '<mark>[' + x + ']</mark>'));
-}
-
-function letterHTML(rawLetter, print) {
-  const l = resolveLiveLetter(rawLetter);
-  const S0 = Store.db.settings;
-  const isHi = l.lang === 'hi';
-  const L = LBL[isHi ? 'hi' : 'en'];
-  const sg = (S0.signatories || []).find(x => x.id === l.sig) || (S0.signatories || [])[0] || {};
-  const lhSrc = ImageCache.resolve(S0.letterhead);
-  const stampSrc = l.showSign && sg.stamp ? ImageCache.resolve(sg.stamp) : '';
-  const fontPt = Math.max(10, Math.min(16, Number(S0.fontPt) || 12));
-  const sigAlignClass = S0.sigAlign === 'left' ? 'sig-left' : 'sig-right';
-  const fontClass = S0.fontFamily === 'mukta' ? 'mukta' : '';
-  const certClass = l.layout === 'cert' && !S0.preprinted ? 'cert-box' : '';
-
-  const head = S0.preprinted
-    ? `<div class="pre" style="height:${Math.max(10, Math.min(100, +S0.topMm || 48))}mm">${print ? '' : 'Pre-printed Letterhead Blank Space (' + (+S0.topMm || 48) + ' mm)'}</div>`
-    : (lhSrc ? `<img class="lh" src="${esc(lhSrc)}" alt="Letterhead">` : `<div style="text-align:center;border-bottom:2px solid #1f3a5f;padding-bottom:6px;margin-bottom:8px"><b>${esc(S0.school.name)}</b><br><small>${esc(S0.school.addressEn)}</small></div>`);
-
-  const ref = l.ref || (print ? '' : '__________');
-  let h = `<div class="lt ${isHi ? 'hi' : ''} ${fontClass} ${certClass}" style="font-size:${fontPt}pt">`;
-  h += head;
-  h += `<div class="refrow"><b>${esc(L.ref)} ${esc(ref)}</b><b>${esc(L.date)} ${esc(fmtD(l.date))}</b></div>`;
-
-  if (S0.showMajorHeadOnLetter || l.subHead) {
-    const mh = Core.getMajorHeadObj(Store.db, l.majorHead);
-    const mhTxt = [mh ? (isHi ? mh.hi : mh.en) : '', l.subHead].filter(Boolean).join(' / ');
-    if (mhTxt) h += `<div class="headrow">${esc(L.head)} ${esc(mhTxt)}</div>`;
-  }
-
-  if (l.layout === 'letter' && l.to) {
-    h += `<div class="to"><b>${esc(L.to)}</b><br>${para(l.to, print).replace(/<\/?p>/g, '')}</div>`;
-  }
-  if (l.layout === 'notice' || l.layout === 'cert') {
-    if (l.heading) h += `<div class="hd">${para(l.heading, print).replace(/<\/?p>/g, '')}</div>`;
-    if (l.subject) h += `<div class="sj">${para(l.subject, print).replace(/<\/?p>/g, '')}</div>`;
-    if (l.layout === 'notice' && l.to) h += `<div class="to2">${para(l.to, print).replace(/<\/?p>/g, '')}</div>`;
-  } else if (l.subject) {
-    h += `<div class="sub"><b>${esc(L.subj)} ${para(l.subject, print).replace(/<\/?p>/g, '')}</b></div>`;
-  }
-
-  if (l.layout === 'letter' && l.salutation) {
-    h += `<p class="sal">${esc(l.salutation)}</p>`;
-  }
-  h += `<div class="bd">${para(l.body || '', print)}</div>`;
-
-  const sigName = isHi ? (sg.nameHi || sg.name || '') : (sg.name || '');
-  const sigDesig = isHi ? (sg.designationHi || sg.designation || '') : (sg.designation || '');
-  const sigOrg = isHi ? (sg.orgHi || sg.org || '') : (sg.org || '');
-
-  let sigHtml = `<div class="sig ${sigAlignClass}">`;
-  if (l.layout === 'letter' && l.closing) sigHtml += `<div>${esc(l.closing)}</div>`;
-  if (stampSrc) {
-    sigHtml += `<img class="stamp" src="${esc(stampSrc)}" alt="Signature & Stamp"><div class="nm"><b>(${esc(sigName)})</b></div>`;
-  } else {
-    sigHtml += `<div class="gap"></div><div class="nm"><b>(${esc(sigName)})</b></div><div>${esc(sigDesig)}</div><div>${esc(sigOrg)}</div>`;
-  }
-  h += sigHtml + '</div>';
-
-  if (l.encl) h += `<div class="ft"><b>${esc(L.encl)}</b> ${para(l.encl, print).replace(/<\/?p>/g, '')}</div>`;
-  if (l.cc) h += `<div class="ft"><b>${esc(L.cc)}</b><br>${para(l.cc, print).replace(/<\/?p>/g, '')}</div>`;
-  return h + '</div>';
-}
-
-function printHTML(html) {
-  const r = $('#printRoot');
-  r.innerHTML = html;
-  document.body.classList.add('printing');
-  const done = () => {
-    document.body.classList.remove('printing');
-    r.innerHTML = '';
-    window.removeEventListener('afterprint', done);
+  $('#logoutBtn').onclick = async () => {
+    try { await api('/api/auth/logout', {}); } catch (_) {}
+    auth = { authenticated: false, user: null, csrfToken: null };
+    db = null;
+    ed = null;
+    showAuthGate(false);
   };
-  window.addEventListener('afterprint', done);
-  setTimeout(() => window.print(), 80);
-}
 
-/* ---------- App Router ---------- */
-const S = {
-  view: 'home',
-  cur: null,
-  dashHead: '',
-  q: '',
-  head: '',
-  subHead: '',
-  status: '',
-  year: '',
-  fromDate: '',
-  toDate: '',
-  inQ: '',
-  inHead: '',
-  timer: null,
-  activeField: null,
-};
-
-function statusChip(s) {
-  const map = {
-    draft: 'Draft (प्रारूप)',
-    issued: 'Issued (निर्गत)',
-    dispatched: 'Dispatched (प्रेषित)',
-    cancelled: 'Cancelled (रद्द)',
-    pending: 'Reply Pending (उत्तर बाकी)',
-    replied: 'Replied (उत्तरित)',
-    noaction: 'Recorded (दर्ज)',
-  };
-  const safeClass = ['draft', 'issued', 'dispatched', 'cancelled', 'pending', 'replied', 'noaction'].includes(s) ? s : '';
-  return `<span class="chip ${safeClass}">${esc(map[s] || s)}</span>`;
-}
-
-function go(v, arg) {
-  S.view = v;
-  if (v === 'editor') S.cur = arg || S.cur || newLetter({ tpl: 'req' });
-  if (v !== 'editor') clearTimeout(S.timer);
-  $$('#sideNav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  const views = {
-    home: viewHome,
-    editor: viewEditor,
-    out: viewOut,
-    inw: viewIn,
-    sync: viewSync,
-    sec: viewSec,
-    set: viewSet,
-  };
-  (views[v] || viewHome)();
-  window.scrollTo(0, 0);
-}
-
-/* ---------- 1. DASHBOARD (HOME) ---------- */
-function viewHome() {
-  const db = Store.db;
-  const nx = nextRefNow('ADM');
-  const L = db.letters;
-  const drafts = L.filter(l => l.status === 'draft');
-  const toDisp = L.filter(l => l.status === 'issued');
-  const pend = db.inward.filter(r => r.status === 'pending');
-  const recent = L.filter(l => l.ref).sort((a, b) => (b.issuedAt || 0) - (a.issuedAt || 0)).slice(0, 8);
-  const heads = db.settings.majorHeads || Core.DEFAULT_MAJOR_HEADS;
-  const tpls = allTemplates().filter(t => !S.dashHead || (t.majorHead || 'ADM') === S.dashHead);
-
-  $('#main').innerHTML = `
-    <div class="grid4">
-      <div class="card big">
-        <div class="mut">Next Outward Ref. No. (अगला पत्रांक)</div>
-        <div class="num">${esc(nx.ref)}</div>
-        <div class="mut" style="margin-top:4px">Auto-assigned without gaps on Issue</div>
+  $('#acctBtn').onclick = () => {
+    modal(`
+      <h3>🔑 Change Password (${esc(auth.user.username)})</h3>
+      <label>Current Password<input type="password" id="cpCur"></label>
+      <label>New Password (min 8 characters)<input type="password" id="cpNew"></label>
+      <label>Confirm New Password<input type="password" id="cpNew2"></label>
+      <div class="bar"><span class="sp"></span>
+        <button id="cpCancel">Cancel</button>
+        <button class="pri" id="cpSave">Update Password</button>
       </div>
-      <div class="card">
-        <div class="mut">Saved Drafts (प्रारूप)</div>
-        <div class="num sm">${drafts.length}</div>
-        <div class="mut">Ready to edit / issue</div>
-      </div>
-      <div class="card">
-        <div class="mut">Issued — Awaiting Dispatch (भेजना बाकी)</div>
-        <div class="num sm">${toDisp.length}</div>
-        <div class="mut">Click Outward Register to log</div>
-      </div>
-      <div class="card">
-        <div class="mut">Inward — Reply Pending (उत्तर बाकी)</div>
-        <div class="num sm">${pend.length}</div>
-        <div class="mut">Auto-closes when reply is issued</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row between">
-        <h3 style="margin:0">📊 Search Register by Major Head (मदवार पंजी एवं त्वरित खोज)</h3>
-        <div class="row">
-          <button class="sm ok" id="dlMasterXlsx">📊 Download Master Excel (.xlsx)</button>
-          <button class="sm" id="goSheetSearch">🔍 Open Full Sheet Search</button>
-        </div>
-      </div>
-      <div class="head-pills" style="margin-bottom:0">
-        ${heads.map(h => {
-          const cnt = L.filter(l => (l.majorHead || 'ADM') === h.code).length;
-          return `<button class="head-pill" data-openhead="${esc(h.code)}" title="${esc(h.hi)}"><b>${esc(h.code)}</b> · ${esc(h.en)} <span class="chip">${cnt}</span></button>`;
-        }).join('')}
-      </div>
-    </div>
-
-    ${Session.can('write') ? `
-      <div class="row between" style="margin-top:16px">
-        <h2 style="margin:0">✍ Start a New Official Letter / Certificate (नया पत्र या प्रमाण-पत्र बनाएँ)</h2>
-        <select id="dashHeadSel" style="width:auto;min-width:230px">
-          <option value="">All Major Heads (सभी मद — ${allTemplates().length} प्रारूप)</option>
-          ${heads.map(h => `<option value="${esc(h.code)}" ${S.dashHead === h.code ? 'selected' : ''}>${esc(h.code)} — ${esc(h.en)} (${esc(h.hi)})</option>`).join('')}
-        </select>
-      </div>
-      <div class="tiles" style="margin-top:10px">
-        ${tpls.map(t => `
-          <button class="tile" data-t="${esc(t.id)}">
-            <span class="t-head">${esc(t.majorHead || 'ADM')}</span>
-            <span class="t-title">${esc(t.name)}</span>
-            <span class="t-lang">
-              <i data-t="${esc(t.id)}">English</i>
-              <i class="hi" data-t="${esc(t.id)}.hi">हिंदी</i>
-            </span>
-          </button>
-        `).join('')}
-      </div>
-    ` : ''}
-
-    ${drafts.length ? `<h2>📝 Unissued Drafts (अधूरे प्रारूप)</h2>${renderLetterTable(drafts.slice(0, 6))}` : ''}
-    <h2>📤 Recently Issued Letters (हाल ही में निर्गत पत्र)</h2>
-    ${recent.length ? renderLetterTable(recent) : '<div class="card mut">No issued letters yet. Choose any English or हिंदी template tile above to draft your first letter!</div>'}
-  `;
-
-  $('#dlMasterXlsx').onclick = () => downloadFromApi('api/export/xlsx', null, `Master_Letter_Register_${Core.todayISO()}.xlsx`);
-  $('#goSheetSearch').onclick = () => go('out');
-  $$('[data-openhead]').forEach(b => {
-    b.onclick = () => { S.head = b.dataset.openhead; S.q = ''; go('out'); };
-  });
-  const dSel = $('#dashHeadSel');
-  if (dSel) dSel.onchange = e => { S.dashHead = e.target.value; viewHome(); };
-  $$('.tile').forEach(b => {
-    b.onclick = e => {
-      const code = e.target.dataset.t || b.dataset.t;
-      go('editor', newLetter({ tpl: code }));
+    `);
+    $('#cpCancel').onclick = closeModal;
+    $('#cpSave').onclick = async () => {
+      if ($('#cpNew').value !== $('#cpNew2').value) return toast('New passwords do not match.');
+      try {
+        await api('/api/auth/change-password', {
+          currentPassword: $('#cpCur').value,
+          newPassword: $('#cpNew').value,
+        });
+        closeModal();
+        toast('Password updated.');
+      } catch (err) { toast(err.message); }
     };
-  });
-  bindLetterTableClicks();
-}
-
-function renderLetterTable(rows) {
-  return `<div class="table-wrap"><table class="tb">
-    <thead>
-      <tr>
-        <th>Letter No. (पत्रांक)</th>
-        <th>Date</th>
-        <th>Major Head (मद)</th>
-        <th>Recipient (प्राप्तकर्ता)</th>
-        <th>Subject (विषय)</th>
-        <th>Status</th>
-        <th>Download</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rows.map(l => `
-        <tr data-id="${esc(l.id)}">
-          <td><b>${esc(l.ref || 'DRAFT')}</b></td>
-          <td>${esc(fmtD(l.date))}</td>
-          <td><span class="head-badge">${esc(l.majorHead || 'ADM')}</span>${l.subHead ? `<br><small>${esc(l.subHead)}</small>` : ''}</td>
-          <td>${esc(party(l))}</td>
-          <td>${esc(String(l.subject || l.heading || '').replace(/‹([^›]+)›/g, '[$1]'))}</td>
-          <td>${statusChip(l.status)}</td>
-          <td class="act">
-            <button data-dl="docx" title="Download Word (.docx)">📄 .docx</button>
-            <button data-dl="pdf" title="Download PDF (.pdf)">📕 .pdf</button>
-          </td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table></div>`;
-}
-
-function bindLetterTableClicks() {
-  $$('tbody tr[data-id]').forEach(tr => {
-    tr.onclick = (e) => {
-      const id = tr.dataset.id;
-      const dl = e.target.dataset.dl;
-      const l = Store.db.letters.find(x => x.id === id);
-      if (!l) return;
-      if (dl === 'docx') {
-        e.stopPropagation();
-        return downloadFromApi(`api/export/docx?id=${encodeURIComponent(id)}`, null, `Letter_${l.ref || 'Draft'}.docx`);
-      }
-      if (dl === 'pdf') {
-        e.stopPropagation();
-        return downloadFromApi(`api/export/pdf?id=${encodeURIComponent(id)}`, null, `Letter_${l.ref || 'Draft'}.pdf`);
-      }
-      go('editor', clone(l));
-    };
-  });
-}
-
-/* ---------- 2. SMART LETTER EDITOR ---------- */
-function viewEditor() {
-  const l = S.cur;
-  const S0 = Store.db.settings;
-  const t = getTpl(l.tpl);
-  const issued = l.status !== 'draft';
-  const readOnly = !Session.can('write');
-  const heads = S0.majorHeads || Core.DEFAULT_MAJOR_HEADS;
-  const customKeys = detectCustomPlaceholderKeys(l);
-  const unfilled = getUnfilledMarkers(l);
-
-  const renderFieldInput = (f) => {
-    const val = l.fields[f.k] ?? '';
-    const optTag = f.opt ? ' <small>(optional / वैकल्पिक)</small>' : ' <small style="color:#b91c1c">*</small>';
-    if (f.t === 'area') {
-      return `<label>${esc(f.l)}${optTag}<textarea data-k="${esc(f.k)}" rows="3" placeholder="${esc(f.ph || '')}" ${readOnly ? 'disabled' : ''}>${esc(val)}</textarea></label>`;
-    }
-    if (f.t === 'select') {
-      return `<label>${esc(f.l)}${optTag}<select data-k="${esc(f.k)}" ${readOnly ? 'disabled' : ''}>${(f.opts || []).map(o => `<option value="${esc(o)}" ${val === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></label>`;
-    }
-    return `<label>${esc(f.l)}${optTag}<input data-k="${esc(f.k)}" type="${f.t === 'date' ? 'date' : 'text'}" value="${esc(val)}" placeholder="${esc(f.ph || '')}" ${readOnly ? 'disabled' : ''}></label>`;
   };
 
-  $('#main').innerHTML = `<div class="ed">
-    <section class="form">
-      <div class="row between">
-        <div class="row">
-          <b class="refbig">${l.ref ? 'पत्रांक / Ref. No.: ' + esc(l.ref) : 'Next Ref: ' + esc(nextRefNow(l.majorHead, l.date).ref) + ' (assigned on Issue)'}</b>
-          ${statusChip(l.status)}
-          ${l.editedAfterIssue ? '<span class="chip cancelled">Edited after issue</span>' : ''}
+  async function enterApp() {
+    db = await api('/api/db');
+    $('#authGate').hidden = true;
+    $('#appShell').hidden = false;
+    $('#userLabel').textContent = `${auth.user.displayName} (${auth.user.role === 'admin' ? 'Admin' : 'Staff'})`;
+    $('#navUsers').hidden = auth.user.role !== 'admin';
+    refreshChrome();
+    go(curView || 'dash');
+  }
+
+  // ==================== TEMPLATE & PLACEHOLDER ENGINE ====================
+  function allTemplates() {
+    return [...window.TEMPLATES, ...(db.customTemplates || [])];
+  }
+
+  function findTpl(id) {
+    return allTemplates().find(t => t.id === id);
+  }
+
+  function subPlaceholders(str, fields, sysCtx, tplFields = []) {
+    return window.Tpl.render(str, fields, tplFields, sysCtx);
+  }
+
+  function applyTemplate(l) {
+    const t = findTpl(l.tpl);
+    if (!t) return;
+    l.layout = t.layout;
+    if (!l.majorHead) l.majorHead = t.majorHead || Core.inferMajorHead(t.id);
+    const v = t[l.lang] || t.en;
+    const nextPreview = Core.peekRef(db, 'out', l.date, l.majorHead).ref;
+    const sysCtx = Core.buildPlaceholderContext(db, l, nextPreview);
+
+    const fields = Object.assign({}, l.fields);
+    (t.fields || []).forEach(f => {
+      if (f.t === 'date' && fields[f.k]) fields[f.k] = Core.fmtDateDMY(fields[f.k]);
+    });
+
+    const recMap = {};
+    (db.settings.recipients || []).forEach(r => { recMap[r.alias] = r[l.lang] || r.en; });
+    if (v.to && recMap[v.to]) l.to = recMap[v.to];
+    else l.to = subPlaceholders(v.to || '', fields, sysCtx, t.fields);
+
+    l.heading = subPlaceholders(v.heading || '', fields, sysCtx, t.fields);
+    l.subject = subPlaceholders(v.subject || '', fields, sysCtx, t.fields);
+    l.salutation = subPlaceholders(v.salutation || '', fields, sysCtx, t.fields);
+    l.closing = subPlaceholders(v.closing || '', fields, sysCtx, t.fields);
+    l.body = subPlaceholders(v.body || '', fields, sysCtx, t.fields);
+  }
+
+  function resolveLiveTokens(l) {
+    const nextPreview = Core.peekRef(db, 'out', l.date, l.majorHead).ref;
+    const sysCtx = Core.buildPlaceholderContext(db, l, nextPreview);
+    const out = Object.assign({}, l);
+    ['to', 'heading', 'subject', 'salutation', 'body', 'closing', 'encl', 'cc'].forEach(k => {
+      if (typeof out[k] === 'string') {
+        out[k] = subPlaceholders(out[k], l.fields || {}, sysCtx);
+      }
+    });
+    return out;
+  }
+
+  function newFromTemplate(tplId, lang = 'en') {
+    const t = findTpl(tplId) || window.TEMPLATES[0];
+    const S = db.settings;
+    const l = {
+      id: Core.uid(),
+      tpl: t.id,
+      lang,
+      layout: t.layout,
+      majorHead: t.majorHead || Core.inferMajorHead(t.id),
+      subHead: '',
+      date: Core.todayISO(),
+      sig: S.defaultSignatory,
+      showSign: S.defaultShowSign,
+      showQr: t.layout === 'cert' ? true : S.defaultShowQr,
+      fields: {},
+      encl: '',
+      cc: '',
+      remarks: '',
+      status: 'draft',
+    };
+    const sess = Core.sessionFromISO(l.date);
+    (t.fields || []).forEach(f => {
+      if (f.k === 'session' || f.k === 'fy') l.fields[f.k] = sess;
+    });
+    applyTemplate(l);
+    return l;
+  }
+
+  function refreshChrome() {
+    if (!db) return;
+    $('#schoolTag').textContent = `${db.settings.school.en} · U-DISE ${db.settings.school.udise}`;
+    $('#nextRef').textContent = Core.peekRef(db, 'out', Core.todayISO(), 'ADM').ref;
+    const lb = db.settings.lastBackup;
+    const days = lb ? Math.floor((Date.now() - lb) / 864e5) : null;
+    $('#bakStatus').innerHTML = days === null
+      ? '<span style="color:#c53030">⚠ Take backup</span>'
+      : `Backup: ${days === 0 ? 'today' : days + 'd ago'}`;
+
+    const apprCount = db.letters.filter(l => l.status === 'pending_approval').length;
+    const apprBadge = $('#apprBadge');
+    if (apprBadge) {
+      apprBadge.textContent = apprCount;
+      apprBadge.hidden = apprCount === 0;
+    }
+
+    const alertInwCount = db.inward.filter(r => {
+      const m = Core.inwardDeadlineMeta(r);
+      return m.overdue || m.dueSoon;
+    }).length;
+    const inwBadge = $('#inwAlertBadge');
+    if (inwBadge) {
+      inwBadge.textContent = alertInwCount;
+      inwBadge.hidden = alertInwCount === 0;
+    }
+  }
+
+  function go(v) {
+    if (activeSpeechRec) { try { activeSpeechRec.stop(); } catch (_) {} activeSpeechRec = null; }
+    curView = v;
+    $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+    const uiCtx = makeUiCtx();
+    const views = {
+      dash: viewDash,
+      edit: viewEdit,
+      approve: () => window.ModulesUI.renderApprovalQueueView(uiCtx),
+      batch: () => window.ModulesUI.renderBatchMailMergeView(uiCtx),
+      dir: () => window.ModulesUI.renderMasterDirectoryView(uiCtx),
+      sheet: viewSheet,
+      out: viewOut,
+      inw: viewInw,
+      analytics: () => window.ModulesUI.renderAnalyticsAuditView(uiCtx),
+      tpl: viewTpl,
+      users: viewUsers,
+      set: viewSet,
+    };
+    (views[v] || viewDash)();
+  }
+
+  $$('#nav button').forEach(b => { b.onclick = () => go(b.dataset.v); });
+
+  function headOptionsHtml(selectedCode, includeAllLabel) {
+    const heads = db.settings.majorHeads || Core.DEFAULT_MAJOR_HEADS;
+    return (includeAllLabel ? `<option value="">${esc(includeAllLabel)}</option>` : '') +
+      heads.map(h => `<option value="${esc(h.code)}" ${h.code === selectedCode ? 'selected' : ''}>${esc(h.code)} — ${esc(h.en)} (${esc(h.hi)})</option>`).join('');
+  }
+
+  // ==================== 1. DASHBOARD ====================
+  function viewDash() {
+    const yk = Core.yearKey(Core.todayISO(), db.settings.yearMode);
+    const issuedThisYr = db.letters.filter(l => l.refYear === yk && l.status !== 'cancelled').length;
+    const drafts = db.letters.filter(l => l.status === 'draft' || l.status === 'returned').length;
+    const pendingAppr = db.letters.filter(l => l.status === 'pending_approval');
+    const overdueInw = db.inward.filter(r => Core.inwardDeadlineMeta(r).overdue);
+    const dueSoonInw = db.inward.filter(r => Core.inwardDeadlineMeta(r).dueSoon);
+    const pendIn = db.inward.filter(r => r.status === 'pending').length;
+
+    const recent = [...db.letters].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 8);
+
+    const el = $('#view');
+    el.innerHTML = `
+      ${overdueInw.length ? `
+        <div class="alert-banner danger">
+          <div>🚨 <b>${overdueInw.length} Inward Letter(s) Overdue!</b> (${esc(overdueInw.map(r => `${r.no}: ${r.from}`).slice(0, 2).join(' · '))})</div>
+          <button class="sm danger" id="goOverdueBtn">📥 Open Inward Escalations →</button>
         </div>
-        <span id="saved" class="mut"></span>
-      </div>
+      ` : (dueSoonInw.length ? `
+        <div class="alert-banner warn">
+          <div>⏰ <b>${dueSoonInw.length} Inward Letter(s) Due Within 3 Days</b> — timely compliance recommended.</div>
+          <button class="sm" id="goOverdueBtn">📥 View Inward Deadlines →</button>
+        </div>
+      ` : '')}
 
-      <div id="phStatusBox">
-        ${unfilled.length
-          ? `<div class="warn" style="margin:8px 0">⚠ <b>${unfilled.length} Placeholder(s) Unfilled (अधूरे स्थान):</b> ${unfilled.map(u => `<code>[${esc(u)}]</code>`).join(' ')}</div>`
-          : `<div class="ok-banner">✓ <b>All placeholders accurately filled!</b> Ready to Issue, Print, or Download (.docx / .pdf).</div>`}
-      </div>
-
-      <div class="row g">
-        <label>Major Head (मुख्य शीर्ष / मद)
-          <select id="majorHead" ${readOnly ? 'disabled' : ''}>
-            ${heads.map(h => `<option value="${esc(h.code)}" ${(l.majorHead || 'ADM') === h.code ? 'selected' : ''}>${esc(h.code)} — ${esc(h.en)} (${esc(h.hi)})</option>`).join('')}
-          </select>
-        </label>
-        <label>Sub-Head / File No. (उप-शीर्ष / संचिका सं.)
-          <input id="subHead" value="${esc(l.subHead || '')}" placeholder="e.g. Scholarship / CBSE-2026 / File-04" ${readOnly ? 'disabled' : ''}>
-        </label>
-      </div>
-
-      <div class="row g">
-        <label>Template (पत्र का प्रारूप)
-          <select id="tpl" ${readOnly ? 'disabled' : ''}>
-            ${allTemplates().map(x => `<option value="${esc(x.id)}" ${x.id === l.tpl ? 'selected' : ''}>[${esc(x.majorHead || 'ADM')}] ${esc(x.name)}</option>`).join('')}
-          </select>
-        </label>
-        <label style="max-width:130px">Language (भाषा)
-          <select id="lang" ${readOnly ? 'disabled' : ''}>
-            <option value="en" ${l.lang === 'en' ? 'selected' : ''}>English</option>
-            <option value="hi" ${l.lang === 'hi' ? 'selected' : ''}>हिंदी (Unicode)</option>
-          </select>
-        </label>
-        <label style="max-width:155px">Date (दिनांक)
-          <input id="date" type="date" value="${esc(l.date)}" ${readOnly ? 'disabled' : ''}>
-        </label>
-      </div>
-
-      ${l.layout === 'letter' || l.layout === 'notice' ? `
-        <label>Recipient / Addressee (प्राप्तकर्ता चुनें या नीचे टाइप करें)
-          <select id="rcpt" ${readOnly ? 'disabled' : ''}>
-            <option value="">— Custom / Type below —</option>
-            ${S0.recipients.map(r => `<option value="${esc(r.alias)}" ${r.alias === l.rcpt ? 'selected' : ''}>@${esc(r.alias)} — ${esc(r.en.split('\n')[0])}</option>`).join('')}
-          </select>
-        </label>
-        <textarea id="to" rows="3" placeholder="Recipient designation & address..." ${readOnly ? 'disabled' : ''}>${esc(l.to)}</textarea>
-      ` : ''}
-
-      ${t.fields.length || customKeys.length ? `
-        <fieldset>
-          <legend>🎯 Fill Accurate Placeholders (आवश्यक विवरण भरें)</legend>
-          ${t.fields.map(renderFieldInput).join('')}
-          <div id="customPhInputs">
-            ${customKeys.map(ck => `
-              <label>Custom Placeholder <code>{{${esc(ck)}}}</code>
-                <input data-k="${esc(ck)}" type="text" value="${esc(l.fields[ck] || '')}" placeholder="Value for {{${esc(ck)}}}" ${readOnly ? 'disabled' : ''}>
-              </label>
-            `).join('')}
-          </div>
-        </fieldset>
-      ` : `<div id="customPhInputs"></div>`}
-
-      ${!readOnly ? `
-        <div class="ph-bar">
-          <span class="mut" style="width:100%;font-size:11.5px"><b>+ Insert Auto/Custom Placeholder into Subject or Body:</b> (Click any tag below)</span>
-          ${Core.SYSTEM_PLACEHOLDERS.map(p => `<button type="button" class="ph-chip" data-ins="{{${esc(p.key)}}}" title="${esc(p.label)}">+ {{${esc(p.key)}}}</button>`).join('')}
-          <button type="button" class="ph-chip" id="addCustomPhBtn" style="background:#eff6ff;font-weight:700">+ Custom {{…}}</button>
-          <button type="button" class="ph-chip" id="krutiBtn" style="background:#fef3c7;color:#92400e;border-color:#fcd34d" title="Convert legacy KrutiDev-010 text into clean Unicode Hindi">🔤 KrutiDev → Unicode</button>
+      ${pendingAppr.length ? `
+        <div class="alert-banner info">
+          <div>✍️ <b>${pendingAppr.length} Draft Letter(s) Waiting in Principal Approval Queue</b></div>
+          <button class="sm pri" id="goApprBtn">✅ Open Approval Queue →</button>
         </div>
       ` : ''}
-
-      ${l.layout === 'cert' || l.layout === 'notice' ? `
-        <label>Heading (शीर्षक)<input id="heading" value="${esc(l.heading || '')}" ${readOnly ? 'disabled' : ''}></label>
-      ` : ''}
-
-      <label>Subject (विषय)
-        <input id="subject" value="${esc(l.subject)}" placeholder="Official letter subject..." ${readOnly ? 'disabled' : ''}>
-      </label>
-
-      <label>
-        <span>Letter Body (पत्र का मुख्य भाग)
-          <span id="regen" class="mut" style="display:${l.manual ? 'inline' : 'none'}">
-            — manually edited · <a href="#" id="regenb">↻ Reset from template</a>
-          </span>
-        </span>
-        <textarea id="body" rows="10" ${readOnly ? 'disabled' : ''}>${esc(l.body)}</textarea>
-      </label>
-
-      <div id="krutiHint" class="warn" style="display:none">
-        ⚠ यह टेक्स्ट पुराने <b>KrutiDev</b> फ़ॉन्ट जैसा लग रहा है! सभी कंप्यूटर/मोबाइल पर सही दिखने के लिए <button type="button" class="sm pri" id="krutiAutoFix">अभी Unicode हिंदी में बदलें</button>
-      </div>
-
-      <div class="row g">
-        <label>Signatory (हस्ताक्षरकर्ता)
-          <select id="sig" ${readOnly ? 'disabled' : ''}>
-            ${S0.signatories.map(s => `<option value="${esc(s.id)}" ${s.id === l.sig ? 'selected' : ''}>${esc(s.name)} — ${esc(s.designation)}</option>`).join('')}
-          </select>
-        </label>
-        <label class="chk">
-          <input id="showSign" type="checkbox" ${l.showSign ? 'checked' : ''} ${readOnly ? 'disabled' : ''}>
-          Attach Signature &amp; Stamp (हस्ताक्षर व मुहर जोड़ें)
-        </label>
-      </div>
-
-      <div class="row g">
-        <label>Enclosures (संलग्नक)<input id="encl" value="${esc(l.encl)}" placeholder="e.g. As stated above (02 pages)" ${readOnly ? 'disabled' : ''}></label>
-        <label>Copy To (प्रतिलिपि)<textarea id="cc" rows="2" placeholder="1. DEO Dumka for kind information..." ${readOnly ? 'disabled' : ''}></textarea></label>
-      </div>
-
-      <label>Register Remarks (पंजी अभ्युक्ति — केवल रजिस्टर/एक्सेल के लिए, पत्र पर प्रिंट नहीं होगा)
-        <input id="remarks" value="${esc(l.remarks || '')}" placeholder="Optional file note for Excel / Google Sheet register..." ${readOnly ? 'disabled' : ''}>
-      </label>
 
       <div class="bar">
-        ${!readOnly ? (issued
-          ? `<button class="pri" id="reprint">🖨 Print A4</button>
-             <button id="save">💾 Save Changes</button>
-             <button id="disp">✉ Dispatch…</button>`
-          : `<button class="pri" id="ip">🖨 Issue &amp; Print <kbd>Ctrl+Enter</kbd></button>
-             <button class="ok" id="issue">✓ Issue Ref. No.</button>
-             <button id="save">💾 Save Draft <kbd>Ctrl+S</kbd></button>`
-        ) : ''}
-        <button id="dlDocx" title="Download Editable Microsoft Word (.docx)">📄 Word (.docx)</button>
-        <button id="dlPdf" title="Download Official PDF with Embedded Fonts (.pdf)">📕 PDF (.pdf)</button>
-        ${!readOnly ? `<button class="ghost" id="dup">📋 Duplicate</button>` : ''}
-        ${Session.can('admin') && issued && l.status !== 'cancelled' ? `<button class="danger" id="cancel">🚫 Cancel</button>` : ''}
-        ${Session.can('admin') && !issued ? `<button class="danger" id="del">🗑 Delete Draft</button>` : ''}
+        <h2 style="margin:0">📊 School Office Command Center</h2>
+        <span class="sp"></span>
+        <button class="pri" id="dNew">+ New Letter</button>
+        <button class="ok" id="dBatch">⚡ Bulk Mail-Merge</button>
+        <button id="dScan">📷 Scan Inward (OCR)</button>
+        <button id="dXlsx">📊 Master Excel (.xlsx)</button>
       </div>
-    </section>
 
-    <section class="prev">
-      <div class="zoom"><div class="page" id="preview"></div></div>
-    </section>
-  </div>`;
+      <div class="stats">
+        <div class="stat" data-go="sheet"><b>${issuedThisYr}</b><span>Issued in ${yk} · Next: ${esc(Core.peekRef(db, 'out', Core.todayISO(), 'ADM').ref)}</span></div>
+        <div class="stat" data-go="approve"><b>${pendingAppr.length}</b><span>Approval Queue (अनुमोदन कतार)</span></div>
+        <div class="stat" data-go="dir"><b>${db.students.length + db.staff.length}</b><span>Students (${db.students.length}) &amp; Staff (${db.staff.length})</span></div>
+        <div class="stat" data-go="inw"><b>${pendIn}</b><span>Inward Replies Pending (${overdueInw.length} Overdue)</span></div>
+        <div class="stat" data-go="out" data-s="draft"><b>${drafts}</b><span>Saved Drafts</span></div>
+      </div>
 
-  // Set textarea value safely
-  const ccEl = $('#cc');
-  if (ccEl) ccEl.value = l.cc || '';
+      <div class="card">
+        <div class="bar">
+          <h3 style="margin:0">Recent Letters &amp; Certificates</h3>
+          <span class="sp"></span>
+          <button class="sm" id="goAnalyticsBtn">📈 View Full Analytics &amp; Audit →</button>
+        </div>
+        ${recent.length ? `<div class="table-wrap"><table class="tbl">
+          <thead><tr><th>Ref. No.</th><th>Date</th><th>Major Head</th><th>Recipient / Party</th><th>Subject</th><th>Status</th><th></th></tr></thead>
+          <tbody>${recent.map(l => `<tr>
+            <td><b>${esc(l.ref || '—')}</b></td>
+            <td>${esc(Core.fmtDateDMY(l.date))}</td>
+            <td><span class="pill p-head">${esc(l.majorHead || 'ADM')}</span></td>
+            <td>${esc((l.to || '').split('\n')[0] || (l.fields && l.fields.name) || '—')}</td>
+            <td>${esc(l.subject || l.heading || '(no subject)')}</td>
+            <td><span class="pill p-${l.status}">${esc(l.status)}</span></td>
+            <td><button class="sm" data-open="${l.id}">Open</button></td>
+          </tr>`).join('')}</tbody></table></div>`
+        : '<p class="mut">No letters yet. Click <b>+ New Letter</b> or <b>⚡ Bulk Mail-Merge</b>.</p>'}
+      </div>
+    `;
 
-  bindEditor();
-  updatePreview();
-}
+    if ($('#goOverdueBtn')) $('#goOverdueBtn').onclick = () => { inwF.status = 'pending'; go('inw'); };
+    if ($('#goApprBtn')) $('#goApprBtn').onclick = () => go('approve');
+    $('#goAnalyticsBtn').onclick = () => go('analytics');
+    $('#dNew').onclick = () => { ed = newFromTemplate('req', 'en'); go('edit'); };
+    $('#dBatch').onclick = () => go('batch');
+    $('#dScan').onclick = () => { go('inw'); setTimeout(() => { if ($('#iScanBtn')) $('#iScanBtn').click(); }, 80); };
+    $('#dXlsx').onclick = () => downloadBinary('/api/export/register-xlsx', 'GET', null, `Letter_Register_${Core.todayISO()}.xlsx`);
 
-function refreshPlaceholderBanner() {
-  const box = $('#phStatusBox');
-  if (!box || !S.cur) return;
-  const unfilled = getUnfilledMarkers(S.cur);
-  box.innerHTML = unfilled.length
-    ? `<div class="warn" style="margin:8px 0">⚠ <b>${unfilled.length} Placeholder(s) Unfilled (अधूरे स्थान):</b> ${unfilled.map(u => `<code>[${esc(u)}]</code>`).join(' ')}</div>`
-    : `<div class="ok-banner">✓ <b>All placeholders accurately filled!</b> Ready to Issue, Print, or Download (.docx / .pdf).</div>`;
-}
-
-function refreshCustomPlaceholderInputs() {
-  const wrap = $('#customPhInputs');
-  if (!wrap || !S.cur) return;
-  const keys = detectCustomPlaceholderKeys(S.cur);
-  const existing = [...$$('input[data-k]', wrap)].map(i => i.dataset.k);
-  if (JSON.stringify(keys) === JSON.stringify(existing)) return;
-  wrap.innerHTML = keys.map(ck => `
-    <label>Custom Placeholder <code>{{${esc(ck)}}}</code>
-      <input data-k="${esc(ck)}" type="text" value="${esc(S.cur.fields[ck] || '')}" placeholder="Enter value for {{${esc(ck)}}}">
-    </label>
-  `).join('');
-  $$('input[data-k]', wrap).forEach(inp => {
-    inp.addEventListener('input', () => {
-      S.cur.fields[inp.dataset.k] = inp.value;
-      updatePreview();
-      refreshPlaceholderBanner();
-      touch();
+    $$('[data-go]', el).forEach(s => s.onclick = () => {
+      if (s.dataset.s !== undefined) outF.status = s.dataset.s;
+      go(s.dataset.go);
     });
-  });
-}
-
-function updatePreview() {
-  const p = $('#preview');
-  if (p && S.cur) p.innerHTML = letterHTML(S.cur, false);
-  refreshPlaceholderBanner();
-}
-
-function touch() {
-  if (!Session.can('write')) return;
-  S.cur.dirty = true;
-  clearTimeout(S.timer);
-  const sv = $('#saved');
-  if (sv) sv.textContent = 'editing…';
-  S.timer = setTimeout(() => saveCur(true), 1400);
-}
-
-function syncTextFields() {
-  const l = S.cur;
-  if ($('#subject')) $('#subject').value = l.subject;
-  if ($('#body')) $('#body').value = l.body;
-  if ($('#to')) $('#to').value = l.to;
-  if ($('#heading')) $('#heading').value = l.heading;
-  if ($('#regen')) $('#regen').style.display = l.manual ? 'inline' : 'none';
-}
-
-async function saveCur(quiet = false) {
-  const l = S.cur;
-  if (!l || S.view !== 'editor' || !Session.can('write')) return;
-  clearTimeout(S.timer);
-  try {
-    const r = await Store.op('saveLetter', l);
-    S.cur = Object.assign(l, r);
-    l.dirty = false;
-    const sv = $('#saved');
-    if (sv) sv.textContent = 'Saved ✓';
-    if (!quiet) toast('Saved to Register & Excel ✓');
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
-function bindEditor() {
-  const l = S.cur;
-  const on = (sel, ev, fn) => { const e = $(sel); if (e) e.addEventListener(ev, fn); };
-
-  ['#subject', '#body', '#to', '#encl', '#cc'].forEach(sel => {
-    const el = $(sel);
-    if (el) el.addEventListener('focus', () => { S.activeField = el; });
-  });
-
-  $$('[data-k]').forEach(inp => {
-    const evName = inp.tagName === 'SELECT' ? 'change' : 'input';
-    inp.addEventListener(evName, () => {
-      l.fields[inp.dataset.k] = inp.value;
-      regen(l);
-      syncTextFields();
-      updatePreview();
-      touch();
+    $$('[data-open]', el).forEach(b => b.onclick = () => {
+      ed = JSON.parse(JSON.stringify(db.letters.find(x => x.id === b.dataset.open)));
+      go('edit');
     });
-  });
-
-  on('#majorHead', 'change', e => { l.majorHead = e.target.value; updatePreview(); viewEditor(); touch(); });
-  on('#subHead', 'input', e => { l.subHead = e.target.value; updatePreview(); touch(); });
-  on('#tpl', 'change', e => {
-    l.tpl = e.target.value;
-    const tObj = getTpl(l.tpl);
-    l.majorHead = tObj.majorHead || Core.inferMajorHead(l.tpl);
-    l.manual = false;
-    l.fields = Object.assign(defaultFields(l.tpl, l.date), l.fields);
-    regen(l);
-    viewEditor();
-    touch();
-  });
-  on('#lang', 'change', e => {
-    l.lang = e.target.value;
-    if (!l.manual) regen(l);
-    else {
-      const c = getTpl(l.tpl)[l.lang] || getTpl(l.tpl).en;
-      l.salutation = c.salutation || '';
-      l.closing = c.closing || '';
-      if (!l.heading) l.heading = c.heading || '';
-    }
-    if (!l.toManual) regen(l);
-    viewEditor();
-    touch();
-  });
-  on('#date', 'change', e => { l.date = e.target.value; regen(l); syncTextFields(); updatePreview(); touch(); });
-  on('#rcpt', 'change', e => { l.rcpt = e.target.value; l.toManual = false; regen(l); syncTextFields(); updatePreview(); touch(); });
-  on('#to', 'input', e => { l.to = e.target.value; l.toManual = true; refreshCustomPlaceholderInputs(); updatePreview(); touch(); });
-  on('#heading', 'input', e => { l.heading = e.target.value; updatePreview(); touch(); });
-  on('#subject', 'input', e => {
-    l.subject = e.target.value;
-    l.manual = true;
-    if ($('#regen')) $('#regen').style.display = 'inline';
-    refreshCustomPlaceholderInputs();
-    updatePreview();
-    touch();
-  });
-  on('#body', 'input', e => {
-    l.body = e.target.value;
-    l.manual = true;
-    if ($('#regen')) $('#regen').style.display = 'inline';
-    if ($('#krutiHint')) $('#krutiHint').style.display = KrutiDev.looksLikeKrutiDev(l.body) ? 'block' : 'none';
-    refreshCustomPlaceholderInputs();
-    updatePreview();
-    touch();
-  });
-  on('#regenb', 'click', e => {
-    e.preventDefault();
-    l.manual = false;
-    regen(l);
-    syncTextFields();
-    updatePreview();
-    touch();
-  });
-  on('#sig', 'change', e => { l.sig = e.target.value; updatePreview(); touch(); });
-  on('#showSign', 'change', e => { l.showSign = e.target.checked; updatePreview(); touch(); });
-  on('#encl', 'input', e => { l.encl = e.target.value; refreshCustomPlaceholderInputs(); updatePreview(); touch(); });
-  on('#cc', 'input', e => { l.cc = e.target.value; refreshCustomPlaceholderInputs(); updatePreview(); touch(); });
-  on('#remarks', 'input', e => { l.remarks = e.target.value; touch(); });
-
-  // Placeholder chip insertion
-  $$('.ph-chip[data-ins]').forEach(btn => {
-    btn.onclick = () => {
-      const target = S.activeField || $('#body');
-      if (!target) return;
-      const tag = btn.dataset.ins;
-      const start = target.selectionStart ?? target.value.length;
-      const end = target.selectionEnd ?? target.value.length;
-      target.value = target.value.slice(0, start) + tag + target.value.slice(end);
-      target.dispatchEvent(new Event('input'));
-      target.focus();
-      target.selectionStart = target.selectionEnd = start + tag.length;
-    };
-  });
-
-  on('#addCustomPhBtn', 'click', async () => {
-    const v = await ask('Insert Custom Placeholder (कस्टम प्लेसहोल्डर जोड़ें)', [
-      { k: 'name', l: 'Placeholder Key (e.g. bank_account, roll_no, amount)', ph: 'custom_field' },
-      { k: 'val', l: 'Value (मान)', ph: 'Enter value now or fill later' },
-    ], 'Insert Placeholder');
-    if (!v || !v.name) return;
-    const key = v.name.trim().replace(/[^a-zA-Z0-9_\u0900-\u097F]/g, '_');
-    if (!key) return;
-    if (v.val) l.fields[key] = v.val;
-    const target = S.activeField || $('#body');
-    const tag = `{{${key}}}`;
-    const start = target.selectionStart ?? target.value.length;
-    target.value = target.value.slice(0, start) + tag + target.value.slice(target.selectionEnd ?? start);
-    target.dispatchEvent(new Event('input'));
-  });
-
-  const convertKrutiNow = () => {
-    l.subject = KrutiDev.looksLikeKrutiDev(l.subject) ? KrutiDev.toUnicode(l.subject) : l.subject;
-    l.body = KrutiDev.toUnicode(l.body);
-    if (l.to && KrutiDev.looksLikeKrutiDev(l.to)) l.to = KrutiDev.toUnicode(l.to);
-    l.lang = 'hi';
-    l.manual = true;
-    viewEditor();
-    touch();
-    toast('Converted KrutiDev to standard Unicode Hindi ✓');
-  };
-  on('#krutiBtn', 'click', convertKrutiNow);
-  on('#krutiAutoFix', 'click', convertKrutiNow);
-
-  on('#save', 'click', () => saveCur(false));
-  on('#ip', 'click', () => issueCur(true));
-  on('#issue', 'click', () => issueCur(false));
-  on('#reprint', 'click', async () => { await saveCur(true); printHTML(letterHTML(S.cur, true)); });
-
-  on('#dlDocx', 'click', async () => {
-    if (Session.can('write')) await saveCur(true);
-    const resolved = resolveLiveLetter(S.cur);
-    downloadFromApi('api/export/docx', { letter: resolved }, `Letter_${resolved.ref || 'Draft'}.docx`);
-  });
-
-  on('#dlPdf', 'click', async () => {
-    if (Session.can('write')) await saveCur(true);
-    const resolved = resolveLiveLetter(S.cur);
-    downloadFromApi('api/export/pdf', { letter: resolved }, `Letter_${resolved.ref || 'Draft'}.pdf`);
-  });
-
-  on('#dup', 'click', () => {
-    const c = clone(S.cur);
-    ['ref', 'refNo', 'refYear', 'issuedAt', 'issuedBy', 'dispatch', 'reply', 'cancelReason', 'editedAfterIssue', 'createdAt'].forEach(k => delete c[k]);
-    c.id = Core.uid();
-    c.status = 'draft';
-    c.date = Core.todayISO();
-    c.replyTo = '';
-    go('editor', c);
-    toast('Duplicated as new draft');
-  });
-
-  on('#del', 'click', async () => {
-    if (!confirm('Delete this unissued draft permanently?')) return;
-    try { await Store.op('deleteLetter', { id: l.id }); S.cur = null; go('home'); } catch (e) { toast(e.message, true); }
-  });
-  on('#disp', 'click', () => dispatchDlg(l.id));
-  on('#cancel', 'click', () => cancelDlg(l.id));
-}
-
-async function issueCur(andPrint) {
-  const l = S.cur;
-  const resolved = resolveLiveLetter(l);
-  if (!resolved.body.trim() && l.layout !== 'cert') {
-    return toast('Letter body cannot be empty (पत्र का मुख्य भाग खाली है).', true);
   }
-  const unfilled = getUnfilledMarkers(l);
-  if (unfilled.length && !confirm(`Some placeholders are still unfilled: [${unfilled.join(', ')}].\nIssue Ref. No. anyway?`)) {
-    return;
+
+  // ==================== 2. LIVE LETTERPREVIEW + QR ====================
+  function renderPaper(rawLetter) {
+    const l = resolveLiveTokens(rawLetter);
+    const S = db.settings;
+    const L = LBL[l.lang] || LBL.en;
+    const sg = S.signatories.find(x => x.id === l.sig) || S.signatories[0] || {};
+    const hi = l.lang === 'hi';
+    const refShown = l.ref || `${Core.peekRef(db, 'out', l.date, l.majorHead).ref} (preview)`;
+    const mark = s => esc(s).replace(/‹([^›]+)›/g, '<span class="unfilled">[$1]</span>');
+
+    let lhHtml = '';
+    if (S.preprinted) lhHtml = `<div class="lh-spacer"></div>`;
+    else if (S.letterhead) lhHtml = `<div class="lh"><img src="${esc(S.letterhead)}" alt="Letterhead"></div>`;
+    else lhHtml = `<div class="lh-text"><h1>${esc(S.school.name)}</h1><div>${esc(S.school.addressEn)}</div></div>`;
+
+    const paras = (l.body || '').split(/\n{2,}/).map(p => `<p>${mark(p)}</p>`).join('');
+    const chosenStamp = l.customStamp || sg.stamp;
+    const showStampNow = (l.showSign || l.customStamp) && chosenStamp;
+    const sigImg = showStampNow ? `<img class="stamp" src="${esc(chosenStamp)}" alt="Signature">` : `<div class="space"></div>`;
+    const sigName = hi ? (sg.nameHi || sg.name) : sg.name;
+    const sigDesig = hi ? (sg.designationHi || sg.designation) : sg.designation;
+    const sigOrg = hi ? (sg.orgHi || sg.org) : sg.org;
+    const wmark = l.status === 'cancelled' ? '<div class="wmark">CANCELLED</div>' : '';
+
+    const mhObj = Core.getMajorHeadObj(db, l.majorHead);
+    const headLine = (S.showMajorHeadOnLetter || l.subHead)
+      ? `<div class="meta-head">${L.head} ${esc([mhObj ? (hi ? mhObj.hi : mhObj.en) : '', l.subHead].filter(Boolean).join(' / '))}</div>`
+      : '';
+
+    const qrInfo = l.ref ? cachedQrMap[l.id] : null;
+    const qrHtml = (l.showQr !== false && l.ref && qrInfo && qrInfo.qrDataUrl)
+      ? `<div class="qr-box"><img src="${esc(qrInfo.qrDataUrl)}" alt="Verify QR"><b>${hi ? 'सत्यापित दस्तावेज़' : 'Verified Document'}</b><br><span>Code: ${esc(qrInfo.verifyCode)}</span></div>`
+      : (l.showQr !== false && !l.ref ? `<div class="qr-box" style="border:1px dashed #94a3b8;padding:6px;border-radius:6px">🛡 <b>QR Code</b><br><small>Auto-generated upon Ref. No. Issue</small></div>` : '<div></div>');
+
+    return `
+      <div id="paper" class="${hi ? 'hi' : ''} ${S.fontFamily === 'mukta' ? 'f-mukta' : ''} ${l.layout === 'cert' && !S.preprinted ? 'cert-border' : ''}"
+           style="--fpt:${S.fontPt}pt;--topmm:${S.topMm}mm">
+        ${wmark}
+        ${lhHtml}
+        <div class="meta">
+          <div>${L.ref} ${esc(refShown)}</div>
+          <div>${L.date} ${esc(Core.fmtDateDMY(l.date))}</div>
+        </div>
+        ${headLine}
+        ${l.layout === 'letter' && l.to ? `<div class="to"><b>${L.to}</b>\n${mark(l.to)}</div>` : ''}
+        ${(l.layout === 'notice' || l.layout === 'cert') && l.heading ? `<div class="heading">${mark(l.heading)}</div>` : ''}
+        ${l.subject ? `<div class="subj ${l.layout !== 'letter' ? 'center' : ''}">${l.layout === 'letter' ? L.subj + ' ' : ''}${mark(l.subject)}</div>` : ''}
+        ${l.layout === 'notice' && l.to ? `<div class="subj center">${mark(l.to)}</div>` : ''}
+        ${l.layout === 'letter' && l.salutation ? `<div class="sal">${mark(l.salutation)}</div>` : ''}
+        <div class="body">${paras}</div>
+        <div class="foot-grid ${S.sigAlign === 'left' ? 'sig-left' : ''}">
+          ${qrHtml}
+          <div class="sig ${S.sigAlign === 'left' ? 'left' : ''}">
+            ${l.layout === 'letter' && l.closing ? `<div>${mark(l.closing)}</div>` : ''}
+            ${sigImg}
+            ${sigName ? `<div><b>(${esc(sigName)})</b></div>` : ''}
+            ${(!showStampNow || l.customStamp) && sigDesig ? `<div>${esc(sigDesig)}</div>` : ''}
+            ${(!showStampNow || l.customStamp) && sigOrg ? `<div>${esc(sigOrg)}</div>` : ''}
+          </div>
+        </div>
+        ${l.encl ? `<div class="encl"><b>${L.encl}</b> ${mark(l.encl)}</div>` : ''}
+        ${l.cc ? `<div class="cc"><b>${L.cc}</b>\n${mark(l.cc)}</div>` : ''}
+      </div>`;
   }
-  try {
-    // Freeze resolved text on issue so permanent record has exact final wording
-    const toSave = Object.assign(l, {
-      to: resolved.to,
-      heading: resolved.heading,
-      subject: resolved.subject,
-      body: resolved.body,
-      encl: resolved.encl,
-      cc: resolved.cc,
-    });
-    const sv = await Store.op('saveLetter', toSave);
-    Object.assign(l, sv);
-    const issued = await Store.op('issueLetter', { id: l.id, date: l.date });
-    S.cur = issued;
-    toast(`Issued — Ref. No. ${issued.ref} (${issued.majorHead}) saved to Register & Excel!`);
-    viewEditor();
-    if (andPrint) printHTML(letterHTML(issued, true));
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
 
-async function dispatchDlg(id) {
-  const l = Store.db.letters.find(x => x.id === id);
-  if (!l) return;
-  const v = await ask(`Mark Dispatched — Ref. No. ${l.ref || ''}`, [
-    { k: 'mode', l: 'Dispatch Mode (प्रेषण माध्यम)', type: 'select', opts: ['By Hand / दस्ती', 'Speed Post / स्पीड पोस्ट', 'Registered Post / निबंधित डाक', 'Official Email / ईमेल', 'WhatsApp / इलेक्ट्रॉनिक संदेश', 'Special Messenger / विशेष दूत'], v: (l.dispatch && l.dispatch.mode) || 'By Hand / दस्ती' },
-    { k: 'date', l: 'Dispatch Date (प्रेषण तिथि)', type: 'date', v: (l.dispatch && l.dispatch.date) || Core.todayISO() },
-    { k: 'note', l: 'Receipt / Consignment / Tracking No. (पावती या ट्रैकिंग सं.)', v: (l.dispatch && l.dispatch.note) || '' },
-  ], 'Save Dispatch');
-  if (!v) return;
-  const r = await Store.op('patchLetter', { id, patch: { dispatch: v } });
-  if (S.cur && S.cur.id === id) S.cur = Object.assign(S.cur, r);
-  toast('Dispatch details recorded ✓');
-  go(S.view, S.cur);
-}
-
-async function cancelDlg(id) {
-  const v = await ask('Cancel Issued Letter (Ref. No. remains preserved in Register)', [
-    { k: 'reason', l: 'Reason for Cancellation (रद्द करने का कारण)', ph: 'Typing error / superseded by new order...' },
-  ], 'Confirm Cancel');
-  if (!v) return;
-  const r = await Store.op('cancelLetter', { id, reason: v.reason });
-  toast('Letter marked Cancelled');
-  if (S.view === 'editor') go('editor', r);
-  else go(S.view);
-}
-
-/* ---------- 3. SHEET & SEARCH (OUTWARD REGISTER + MAJOR HEADS) ---------- */
-function buildFilterQuery() {
-  const p = new URLSearchParams();
-  if (S.q) p.set('q', S.q);
-  if (S.head) p.set('head', S.head);
-  if (S.subHead) p.set('subHead', S.subHead);
-  if (S.status) p.set('status', S.status);
-  if (S.year) p.set('year', S.year);
-  if (S.fromDate) p.set('from', S.fromDate);
-  if (S.toDate) p.set('to', S.toDate);
-  return p.toString();
-}
-
-function viewOut() {
-  const L = Store.db.letters;
-  const heads = Store.db.settings.majorHeads || Core.DEFAULT_MAJOR_HEADS;
-  const years = [...new Set(L.map(l => l.refYear || Core.yearKey(l.date || Core.todayISO(), Store.db.settings.yearMode)))].sort().reverse();
-
-  $('#main').innerHTML = `
-    <div class="row between">
-      <div>
-        <h2 style="margin:0">📊 Outward Sheet Register &amp; Major Head Search (जावक पंजी एवं मदवार खोज)</h2>
-        <small class="mut">Every Letter No. &amp; Major Head is automatically indexed here and in <code>Master_Letter_Register.xlsx</code>.</small>
-      </div>
-      <div class="row">
-        <button class="ok" id="btnXlsx">📊 Download Excel (.xlsx)</button>
-        <button id="btnRegPdf">📕 Register PDF (.pdf)</button>
-        ${Session.can('write') ? `<label style="margin:0"><span class="btn-like" id="impTrigger"></span><input id="impXlsx" type="file" accept=".xlsx" style="display:none"></label><button id="btnImp">📥 Import Excel</button>` : ''}
-        ${Store.db.settings.gsheet && Store.db.settings.gsheet.webhookUrl && Session.can('write') ? `<button class="pri" id="btnQuickSync">☁ Sync Google Sheet</button>` : ''}
-      </div>
-    </div>
-
-    <div class="head-pills">
-      <button class="head-pill ${!S.head ? 'on' : ''}" data-h="">All Heads (${L.length})</button>
-      ${heads.map(h => {
-        const c = L.filter(x => (x.majorHead || 'ADM') === h.code).length;
-        return `<button class="head-pill ${S.head === h.code ? 'on' : ''}" data-h="${esc(h.code)}"><b>${esc(h.code)}</b> · ${esc(h.en)} (${c})</button>`;
-      }).join('')}
-    </div>
-
-    <div class="card" style="padding:12px 14px">
-      <div class="row g">
-        <label style="flex:2;min-width:220px">Search Letter No., Subject, Recipient, Student/Staff Name (खोजें)
-          <input id="q" placeholder="Type Ref. No. (e.g. 321/26), name, topic, keyword…" value="${esc(S.q)}">
-        </label>
-        <label>Major Head (मुख्य शीर्ष)
-          <select id="headSel">
-            <option value="">All Major Heads</option>
-            ${heads.map(h => `<option value="${esc(h.code)}" ${S.head === h.code ? 'selected' : ''}>${esc(h.code)} — ${esc(h.en)}</option>`).join('')}
-          </select>
-        </label>
-        <label>Sub-Head / File No.
-          <input id="subQ" placeholder="e.g. Scholarship" value="${esc(S.subHead)}">
-        </label>
-        <label style="max-width:135px">Status
-          <select id="st">
-            <option value="">All Status</option>
-            ${['draft', 'issued', 'dispatched', 'cancelled'].map(s => `<option value="${s}" ${S.status === s ? 'selected' : ''}>${s.toUpperCase()}</option>`).join('')}
-          </select>
-        </label>
-        <label style="max-width:110px">Year
-          <select id="yr">
-            <option value="">All Years</option>
-            ${years.map(y => `<option value="${esc(y)}" ${String(S.year) === String(y) ? 'selected' : ''}>${esc(y)}</option>`).join('')}
-          </select>
-        </label>
-        <label style="max-width:140px">From Date
-          <input id="fDate" type="date" value="${esc(S.fromDate)}">
-        </label>
-        <label style="max-width:140px">To Date
-          <input id="tDate" type="date" value="${esc(S.toDate)}">
-        </label>
-        <button id="clrF" class="ghost" style="margin-bottom:8px">✕ Reset</button>
-      </div>
-    </div>
-
-    <div id="rows"></div>
-  `;
-
-  const draw = () => {
-    const q = S.q.trim().toLowerCase();
-    const sub = S.subHead.trim().toLowerCase();
-    const filtered = L.slice()
-      .filter(l => {
-        if (S.head && (l.majorHead || 'ADM') !== S.head) return false;
-        if (sub && !String(l.subHead || '').toLowerCase().includes(sub)) return false;
-        if (S.status && l.status !== S.status) return false;
-        const ly = String(l.refYear || Core.yearKey(l.date || Core.todayISO(), Store.db.settings.yearMode));
-        if (S.year && ly !== String(S.year)) return false;
-        if (S.fromDate && (l.date || '') < S.fromDate) return false;
-        if (S.toDate && (l.date || '') > S.toDate) return false;
-        if (q) {
-          const mh = Core.getMajorHeadObj(Store.db, l.majorHead);
-          const hay = [l.ref, l.majorHead, mh && mh.en, mh && mh.hi, l.subHead, l.to, l.subject, l.heading, l.body, l.remarks, JSON.stringify(l.fields || {})].join(' ').toLowerCase();
-          if (!hay.includes(q)) return false;
+  async function ensureQrLoadedForLetter(l) {
+    if (!l || !l.ref || l.showQr === false || cachedQrMap[l.id]) return;
+    try {
+      const info = await api(`/api/letter/${encodeURIComponent(l.id)}/qr`);
+      if (info && info.issued) {
+        cachedQrMap[l.id] = info;
+        if (curView === 'edit' && ed && ed.id === l.id && $('#pvHost')) {
+          $('#pvHost').innerHTML = renderPaper(ed);
         }
-        return true;
-      })
-      .sort((a, b) => (b.ref ? b.refYear * 1e6 + b.refNo : 1e12 + (b.createdAt || 0)) - (a.ref ? a.refYear * 1e6 + a.refNo : 1e12 + (a.createdAt || 0)));
+      }
+    } catch (_) {}
+  }
 
-    $('#rows').innerHTML = `
-      <div class="table-wrap">
-        <table class="tb">
+  // ==================== 3. DRAFT LETTER STUDIO ====================
+  function viewEdit() {
+    if (!ed) ed = newFromTemplate('req', 'en');
+    const t = findTpl(ed.tpl);
+    const issued = !!ed.ref;
+    const isAdmin = auth.user && auth.user.role === 'admin';
+    const mustRouteApproval = db.settings.requireApprovalForStaff && !isAdmin;
+    const el = $('#view');
+
+    if (issued) ensureQrLoadedForLetter(ed);
+
+    el.innerHTML = `
+      <div class="bar noprint">
+        <button id="eSave">💾 Save</button>
+        ${!issued && !mustRouteApproval ? `<button class="pri" id="eIssue">✅ Issue Ref. No. (${esc(Core.peekRef(db, 'out', ed.date, ed.majorHead).ref)})</button>` : ''}
+        ${!issued && ed.status !== 'pending_approval' ? `<button class="${mustRouteApproval ? 'pri' : 'warn-btn'}" id="eSendAppr">📤 Send for Principal Approval</button>` : ''}
+        ${!issued && ed.status === 'pending_approval' && isAdmin ? `<button class="ok" id="eApproveNow">✅ Principal Approve &amp; Issue</button>` : ''}
+        <button class="ok" id="eDocx" title="Download Editable Microsoft Word (.docx)">📝 Word (.docx)</button>
+        <button class="pri" id="ePdf" title="Download Font-Embedded Server PDF (.pdf)">📕 PDF (.pdf)</button>
+        <button id="ePrint" title="Direct Browser Print">🖨 Print</button>
+        ${issued ? `<button id="eShareWa" title="Share via WhatsApp / Email">📲 Share</button>` : ''}
+        <button id="eLiveSign" title="Sign on Screen with Mouse/Touch">✍️ Live Sign</button>
+        <button id="eDup" title="Duplicate as New Draft">📋 Copy</button>
+        ${issued && ed.status !== 'cancelled' && isAdmin ? `<button class="danger" id="eCancel">Cancel Letter</button>` : ''}
+        <span class="sp"></span>
+        <span class="pill p-${ed.status}">${esc(ed.ref ? ed.status + ' · ' + ed.ref : ed.status)}</span>
+      </div>
+
+      ${ed.status === 'returned' && ed.approvalNote ? `<div class="warn noprint">↩ <b>Returned by Principal for Revision:</b> ${esc(ed.approvalNote)}</div>` : ''}
+      ${issued ? `<div class="warn noprint">🔒 Official Ref. No. <b>${esc(ed.ref)}</b> is permanently locked.</div>` : ''}
+
+      <div class="editor">
+        <div class="ed-pane noprint">
+          <div class="card">
+            <h3>1. Classification, Template &amp; Language</h3>
+            <div class="row g">
+              <label>Template / पत्र प्रारूप
+                <select id="eTpl">
+                  ${allTemplates().map(x => `<option value="${esc(x.id)}" ${x.id === ed.tpl ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+                </select>
+              </label>
+              <label>Language / भाषा
+                <select id="eLang">
+                  <option value="en" ${ed.lang === 'en' ? 'selected' : ''}>English</option>
+                  <option value="hi" ${ed.lang === 'hi' ? 'selected' : ''}>हिंदी (Devanagari)</option>
+                </select>
+              </label>
+            </div>
+            <div class="row g">
+              <label>Major Head (मुख्य शीर्ष / मद) *
+                <select id="eHead">${headOptionsHtml(ed.majorHead || 'ADM')}</select>
+              </label>
+              <label>Sub-Head / File No. (उप-शीर्ष / संचिका)
+                <input id="eSubHead" value="${esc(ed.subHead || '')}" placeholder="e.g. Scholarship / CBSE-2026">
+              </label>
+            </div>
+            <div class="row g">
+              <label>Letter Date (दिनांक)
+                <input type="date" id="eDate" value="${esc(ed.date)}">
+              </label>
+              <label>Layout
+                <select id="eLay">
+                  <option value="letter" ${ed.layout === 'letter' ? 'selected' : ''}>Official Letter</option>
+                  <option value="notice" ${ed.layout === 'notice' ? 'selected' : ''}>Notice / Office Order</option>
+                  <option value="cert" ${ed.layout === 'cert' ? 'selected' : ''}>Certificate (Framed)</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div class="card" id="fieldsCard" ${t && t.fields && t.fields.length ? '' : 'hidden'}>
+            <div class="bar" style="margin-bottom:8px">
+              <h3 style="margin:0">2. Template Details (विवरण भरें)</h3>
+              <span class="sp"></span>
+              <button class="sm" id="eReapply">↻ Regenerate Text</button>
+            </div>
+
+            <!-- MODULE 1: STUDENT / STAFF DIRECTORY INSTANT AUTO-FILL -->
+            <div class="autofill-box">
+              <div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:4px">🎓 Auto-Fill from Student / Staff Master Directory (${db.students.length} Students · ${db.staff.length} Staff)</div>
+              <input id="afInput" placeholder="🔍 Type Student Name, Admission No., Roll No., or Staff Name to auto-fill all fields…">
+              <div id="afDrop" class="af-results" hidden></div>
+              <div id="afDupWarn" style="margin-top:6px;font-size:12px;color:#b45309" hidden></div>
+            </div>
+
+            <div id="fieldsHost"></div>
+          </div>
+
+          <div class="card">
+            <div class="bar" style="margin-bottom:8px">
+              <h3 style="margin:0">3. Smart Bilingual Drafting Studio</h3>
+              <span class="sp"></span>
+              <button class="sm" id="btnVoice" title="Speak in Hindi or English to dictate directly into cursor">🎙 Voice Dictate</button>
+              <button class="sm ${phoneticMode ? 'pri' : ''}" id="btnPhonetic" title="Type Roman Hindi e.g. 'savinya nivedan' + Space -> सविनय निवेदन">⌨ Phonetic हिंदी: ${phoneticMode ? 'ON' : 'OFF'}</button>
+              <button class="sm" id="btnPhrasebook" title="Insert from 80+ Official Sarkari Phrases">📚 Phrasebook</button>
+              <button class="sm" id="btnKruti" title="Convert legacy KrutiDev-010 text to Unicode">🔤 KrutiDev</button>
+            </div>
+
+            <div class="ph-box">
+              <small class="mut"><b>Click any System Placeholder</b> to insert live token at cursor:</small>
+              <div class="ph-chips">
+                ${Core.SYSTEM_PLACEHOLDERS.map(p => `<span class="ph-chip" data-ins="{{${p.key}}}" title="${esc(p.label)}">{{${esc(p.key)}}}</span>`).join('')}
+              </div>
+            </div>
+
+            <div id="toWrap" ${ed.layout === 'cert' ? 'hidden' : ''}>
+              <div class="row" style="margin-bottom:4px">
+                <label style="flex:1;margin:0">Recipient / प्राप्तकर्ता</label>
+                <select id="eQuickTo" style="width:auto">
+                  <option value="">Quick Recipient…</option>
+                  ${db.settings.recipients.map(r => `<option value="${esc(r.alias)}">${esc(r.alias.toUpperCase())} — ${esc((r[ed.lang] || r.en).split('\n')[0])}</option>`).join('')}
+                </select>
+              </div>
+              <textarea id="eTo" rows="3">${esc(ed.to || '')}</textarea>
+            </div>
+
+            <label id="headWrap" ${ed.layout === 'letter' ? 'hidden' : ''} style="margin-top:8px">Heading / शीर्षक
+              <input id="eHeading" value="${esc(ed.heading || '')}">
+            </label>
+            <label style="margin-top:8px">Subject / विषय
+              <input id="eSubj" value="${esc(ed.subject || '')}">
+            </label>
+            <label id="salWrap" ${ed.layout !== 'letter' ? 'hidden' : ''}>Salutation / संबोधन
+              <input id="eSal" value="${esc(ed.salutation || '')}">
+            </label>
+            <label>Body / मुख्य विषय-वस्तु (blank line = new paragraph)
+              <textarea id="eBody" rows="10">${esc(ed.body || '')}</textarea>
+            </label>
+            <div class="row g">
+              <label id="closeWrap" ${ed.layout !== 'letter' ? 'hidden' : ''}>Closing / समापन
+                <input id="eClose" value="${esc(ed.closing || '')}">
+              </label>
+              <label>Signatory / हस्ताक्षरकर्ता
+                <select id="eSig">
+                  ${db.settings.signatories.map(s => `<option value="${esc(s.id)}" ${s.id === ed.sig ? 'selected' : ''}>${esc(s.name)} (${esc(s.designation)})</option>`).join('')}
+                </select>
+              </label>
+            </div>
+            <div class="bar" style="margin:4px 0 8px">
+              <label class="chk"><input type="checkbox" id="eStamp" ${ed.showSign ? 'checked' : ''}> Show Signatory Stamp</label>
+              <label class="chk"><input type="checkbox" id="eQr" ${ed.showQr !== false ? 'checked' : ''}> Attach Tamper-Proof QR Verification</label>
+              ${ed.customStamp ? `<button class="sm danger" id="clearLiveSign">✖ Clear Custom Live Sign</button>` : ''}
+            </div>
+            <label>Enclosure(s) / संलग्नक
+              <input id="eEncl" value="${esc(ed.encl || '')}" placeholder="e.g. 1. Utilization Statement (2 pages)">
+            </label>
+            <label>Copy Forwarded To (CC) / प्रतिलिपि
+              <textarea id="eCc" rows="2" placeholder="1. DEO, Dumka for kind information.">${esc(ed.cc || '')}</textarea>
+            </label>
+            <label>Register Remarks / Internal Note (पंजी टिप्पणी)
+              <input id="eRem" value="${esc(ed.remarks || '')}" placeholder="Internal office note (saved in Excel register, not printed)">
+            </label>
+          </div>
+        </div>
+
+        <div class="pv-wrap">
+          <div class="mut noprint pv-tools" style="margin-bottom:6px">
+            Live A4 Preview · Yellow <code>[tags]</code> highlight unfilled placeholders · Font: <b>${db.settings.fontFamily === 'mukta' ? 'Mukta' : 'Karma'}</b>
+          </div>
+          <div id="pvHost">${renderPaper(ed)}</div>
+        </div>
+      </div>`;
+
+    const paint = () => { $('#pvHost').innerHTML = renderPaper(ed); };
+
+    const buildFields = () => {
+      const tp = findTpl(ed.tpl);
+      const host = $('#fieldsHost');
+      const card = $('#fieldsCard');
+      if (!tp || !tp.fields || !tp.fields.length) { card.hidden = true; return; }
+      card.hidden = false;
+      host.innerHTML = tp.fields.map(f => {
+        const val = ed.fields[f.k] ?? '';
+        const req = f.opt ? '' : ' *';
+        if (f.t === 'area') return `<label>${esc(f.l)}${req}<textarea data-fk="${esc(f.k)}" rows="2" placeholder="${esc(f.ph || '')}">${esc(val)}</textarea></label>`;
+        if (f.t === 'date') return `<label>${esc(f.l)}${req}<input type="date" data-fk="${esc(f.k)}" value="${esc(val)}"></label>`;
+        if (f.t === 'select') return `<label>${esc(f.l)}${req}<select data-fk="${esc(f.k)}">${(f.opts || []).map(o => `<option ${o === val ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></label>`;
+        return `<label>${esc(f.l)}${req}<input data-fk="${esc(f.k)}" value="${esc(val)}" placeholder="${esc(f.ph || '')}"></label>`;
+      }).join('');
+
+      $$('[data-fk]', host).forEach(inp => {
+        window.DraftStudio.attachPhoneticListener(inp, () => phoneticMode, () => {
+          ed.fields[inp.dataset.fk] = inp.value;
+          applyTemplate(ed);
+          syncTextInputs();
+          paint();
+        });
+        inp.oninput = () => {
+          ed.fields[inp.dataset.fk] = inp.value;
+          applyTemplate(ed);
+          syncTextInputs();
+          paint();
+        };
+      });
+    };
+
+    const syncTextInputs = () => {
+      $('#eTo').value = ed.to || '';
+      $('#eHeading').value = ed.heading || '';
+      $('#eSubj').value = ed.subject || '';
+      $('#eSal').value = ed.salutation || '';
+      $('#eBody').value = ed.body || '';
+      $('#eClose').value = ed.closing || '';
+      $('#toWrap').hidden = ed.layout === 'cert';
+      $('#headWrap').hidden = ed.layout === 'letter';
+      $('#salWrap').hidden = ed.layout !== 'letter';
+      $('#closeWrap').hidden = ed.layout !== 'letter';
+    };
+
+    buildFields();
+
+    // Directory Fuzzy Auto-Fill Handler
+    const afInput = $('#afInput');
+    const afDrop = $('#afDrop');
+    const afDupWarn = $('#afDupWarn');
+
+    const checkDuplicateHistory = (person) => {
+      const prevSameTpl = db.letters.filter(l =>
+        l.ref && l.status !== 'cancelled' && l.tpl === ed.tpl && (
+          (l.personRef && l.personRef.id === person.id) ||
+          (l.fields && (l.fields.name === person.name || (person.admNo && l.fields.adm === person.admNo)))
+        )
+      );
+      if (prevSameTpl.length) {
+        const last = prevSameTpl[prevSameTpl.length - 1];
+        afDupWarn.innerHTML = `⚠️ <b>Duplicate Alert:</b> This exact template was already issued to <b>${esc(person.name)}</b> under Ref. No. <b>${esc(last.ref)}</b> on ${esc(Core.fmtDateDMY(last.date))}.`;
+        afDupWarn.hidden = false;
+      } else {
+        afDupWarn.hidden = true;
+      }
+    };
+
+    if (ed.personRef) {
+      const p = (ed.personRef.type === 'staff' ? db.staff : db.students).find(x => x.id === ed.personRef.id);
+      if (p) checkDuplicateHistory(p);
+    }
+
+    if (afInput) {
+      afInput.oninput = () => {
+        const q = afInput.value.trim();
+        if (!q) { afDrop.hidden = true; return; }
+        const combined = [
+          ...db.students.map(s => ({ kind: 'students', badge: '🎓 Student', code: s.admNo || s.rollNo, sub: `${s.cls || ''} · F: ${s.father || ''}`, item: s })),
+          ...db.staff.map(s => ({ kind: 'staff', badge: '👩‍🏫 Staff', code: s.empId, sub: `${s.designation || ''} · ${s.subject || ''}`, item: s })),
+        ];
+        let hits = [];
+        if (window.Fuse) {
+          const fuse = new window.Fuse(combined, { keys: ['code', 'item.name', 'item.nameHi', 'item.father', 'item.cls', 'item.designation'], threshold: 0.36 });
+          hits = fuse.search(q).slice(0, 8).map(r => r.item);
+        } else {
+          hits = combined.filter(c => JSON.stringify(c).toLowerCase().includes(q.toLowerCase())).slice(0, 8);
+        }
+        if (!hits.length) {
+          afDrop.innerHTML = '<div class="af-item mut">No matching student or staff in Master Directory.</div>';
+          afDrop.hidden = false;
+          return;
+        }
+        afDrop.innerHTML = hits.map((h, idx) => `
+          <div class="af-item" data-afidx="${idx}">
+            <b>${esc(h.badge)}: ${esc(h.item.name)}</b> ${h.item.nameHi ? `(${esc(h.item.nameHi)})` : ''} — <code>${esc(h.code || '—')}</code>
+            <div class="mut">${esc(h.sub)}</div>
+          </div>
+        `).join('');
+        afDrop.hidden = false;
+        $$('[data-afidx]', afDrop).forEach(rowEl => {
+          rowEl.onclick = () => {
+            const chosen = hits[+rowEl.dataset.afidx];
+            const mapped = window.ModulesUI.mapPersonToFields(chosen.item, chosen.kind, ed.lang, {
+              purpose: ed.fields.purpose || 'Scholarship / Academic Verification',
+              session: Core.sessionFromISO(ed.date),
+            });
+            ed.fields = Object.assign(ed.fields || {}, mapped);
+            ed.personRef = { type: chosen.kind === 'staff' ? 'staff' : 'student', id: chosen.item.id, code: chosen.code || '', name: chosen.item.name };
+            applyTemplate(ed);
+            buildFields();
+            syncTextInputs();
+            paint();
+            afDrop.hidden = true;
+            afInput.value = `${chosen.item.name} (${chosen.code || 'Selected'})`;
+            checkDuplicateHistory(chosen.item);
+            toast(`Auto-filled details for ${chosen.item.name}!`);
+          };
+        });
+      };
+    }
+
+    // Track focused text input & attach Phonetic Hindi typing listener
+    ['eTo', 'eHeading', 'eSubj', 'eSal', 'eBody', 'eClose', 'eEncl', 'eCc'].forEach(id => {
+      const inp = $('#' + id);
+      if (inp) {
+        inp.addEventListener('focus', () => { activeFocusField = inp; });
+        window.DraftStudio.attachPhoneticListener(inp, () => phoneticMode, () => {
+          inp.dispatchEvent(new Event('input'));
+        });
+      }
+    });
+
+    $$('[data-ins]', el).forEach(chip => {
+      chip.onclick = () => {
+        const target = activeFocusField || $('#eBody');
+        const tok = chip.dataset.ins;
+        const start = target.selectionStart ?? target.value.length;
+        const end = target.selectionEnd ?? target.value.length;
+        target.value = target.value.slice(0, start) + tok + target.value.slice(end);
+        target.dispatchEvent(new Event('input'));
+        target.focus();
+      };
+    });
+
+    // MODULE 6: Voice Dictation (Web Speech API hi-IN / en-IN)
+    $('#btnVoice').onclick = () => {
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRec) {
+        return toast('Browser Voice Dictation works in Chrome / Edge desktop & Android.');
+      }
+      if (activeSpeechRec) {
+        activeSpeechRec.stop();
+        activeSpeechRec = null;
+        $('#btnVoice').classList.remove('voice-on');
+        $('#btnVoice').textContent = '🎙 Voice Dictate';
+        return;
+      }
+      const rec = new SpeechRec();
+      rec.lang = ed.lang === 'hi' ? 'hi-IN' : 'en-IN';
+      rec.continuous = true;
+      rec.interimResults = false;
+      rec.onresult = (ev) => {
+        let transcript = '';
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          if (ev.results[i].isFinal) transcript += ev.results[i][0].transcript + ' ';
+        }
+        if (transcript) {
+          const target = activeFocusField || $('#eBody');
+          const pos = target.selectionStart ?? target.value.length;
+          target.value = target.value.slice(0, pos) + transcript + target.value.slice(pos);
+          target.dispatchEvent(new Event('input'));
+        }
+      };
+      rec.onend = () => {
+        activeSpeechRec = null;
+        if ($('#btnVoice')) {
+          $('#btnVoice').classList.remove('voice-on');
+          $('#btnVoice').textContent = '🎙 Voice Dictate';
+        }
+      };
+      rec.onerror = (e) => toast('Voice Dictation: ' + (e.error || 'stopped'));
+      activeSpeechRec = rec;
+      $('#btnVoice').classList.add('voice-on');
+      $('#btnVoice').textContent = `🔴 Listening (${rec.lang})…`;
+      rec.start();
+    };
+
+    // MODULE 6: Phonetic Toggle
+    $('#btnPhonetic').onclick = () => {
+      phoneticMode = !phoneticMode;
+      $('#btnPhonetic').classList.toggle('pri', phoneticMode);
+      $('#btnPhonetic').textContent = `⌨ Phonetic हिंदी: ${phoneticMode ? 'ON' : 'OFF'}`;
+      toast(phoneticMode ? 'Phonetic Hindi ON: Type Roman words + Space (e.g. savinya nivedan)!' : 'Phonetic Hindi OFF');
+    };
+
+    // MODULE 6: 80+ Sarkari Phrasebook
+    $('#btnPhrasebook').onclick = () => {
+      window.ModulesUI.openPhrasebookModal(makeUiCtx(), ed.lang, (phrase, targetKind) => {
+        const target = targetKind === 'cc' ? $('#eCc') : (activeFocusField || $('#eBody'));
+        const pos = target.selectionStart ?? target.value.length;
+        const prefix = target.value && !target.value.endsWith(' ') && !target.value.endsWith('\n') ? ' ' : '';
+        target.value = target.value.slice(0, pos) + prefix + phrase + target.value.slice(pos);
+        target.dispatchEvent(new Event('input'));
+      });
+    };
+
+    // KrutiDev -> Unicode Converter
+    $('#btnKruti').onclick = () => {
+      modal(`
+        <h3>🔤 KrutiDev-010 → Unicode Hindi Converter</h3>
+        <label>Legacy KrutiDev Text<textarea id="kdIn" rows="5" placeholder="Paste KrutiDev text here…"></textarea></label>
+        <label>Converted Clean Unicode Devanagari<textarea id="kdOut" rows="5"></textarea></label>
+        <div class="bar">
+          <button id="kdConv" class="pri">Convert Now</button>
+          <button id="kdInsert" class="ok">Insert into Letter Body</button>
+          <span class="sp"></span>
+          <button id="kdClose">Close</button>
+        </div>
+      `);
+      $('#kdIn').oninput = () => { $('#kdOut').value = window.krutidevToUnicode($('#kdIn').value); };
+      $('#kdConv').onclick = () => { $('#kdOut').value = window.krutidevToUnicode($('#kdIn').value); };
+      $('#kdInsert').onclick = () => {
+        const u = $('#kdOut').value || window.krutidevToUnicode($('#kdIn').value);
+        if (u) {
+          ed.body = (ed.body ? ed.body + '\n\n' : '') + u;
+          $('#eBody').value = ed.body;
+          paint();
+        }
+        closeModal();
+      };
+      $('#kdClose').onclick = closeModal;
+    };
+
+    // Live Signature Pad inside Editor
+    $('#eLiveSign').onclick = () => {
+      window.ModulesUI.openSignaturePadModal(makeUiCtx(), {
+        title: 'Sign This Document Live',
+        onSigned: async (dataUrl) => {
+          const up = await api('/api/upload-image', { dataUrl, kind: 'livesign' });
+          ed.customStamp = up.url;
+          ed.showSign = true;
+          viewEdit();
+          toast('Live digital signature applied!');
+        },
+      });
+    };
+    if ($('#clearLiveSign')) {
+      $('#clearLiveSign').onclick = () => { delete ed.customStamp; viewEdit(); };
+    }
+
+    $('#eTpl').onchange = e => {
+      ed.tpl = e.target.value;
+      const nt = findTpl(ed.tpl);
+      if (nt && nt.majorHead) { ed.majorHead = nt.majorHead; $('#eHead').value = ed.majorHead; }
+      applyTemplate(ed);
+      buildFields();
+      syncTextInputs();
+      paint();
+    };
+    $('#eLang').onchange = e => { ed.lang = e.target.value; applyTemplate(ed); syncTextInputs(); paint(); };
+    $('#eHead').onchange = e => { ed.majorHead = e.target.value; paint(); };
+    $('#eSubHead').oninput = e => { ed.subHead = e.target.value; paint(); };
+    $('#eDate').onchange = e => { ed.date = e.target.value; paint(); };
+    $('#eLay').onchange = e => { ed.layout = e.target.value; syncTextInputs(); paint(); };
+    $('#eReapply').onclick = () => { applyTemplate(ed); syncTextInputs(); paint(); toast('Template text regenerated.'); };
+    $('#eQuickTo').onchange = e => {
+      const r = db.settings.recipients.find(x => x.alias === e.target.value);
+      if (r) { ed.to = r[ed.lang] || r.en; $('#eTo').value = ed.to; paint(); }
+      e.target.value = '';
+    };
+
+    const bind = (sel, key) => { $(sel).oninput = e => { ed[key] = e.target.value; paint(); }; };
+    bind('#eTo', 'to'); bind('#eHeading', 'heading'); bind('#eSubj', 'subject');
+    bind('#eSal', 'salutation'); bind('#eBody', 'body'); bind('#eClose', 'closing');
+    bind('#eEncl', 'encl'); bind('#eCc', 'cc'); bind('#eRem', 'remarks');
+    $('#eSig').onchange = e => { ed.sig = e.target.value; paint(); };
+    $('#eStamp').onchange = e => { ed.showSign = e.target.checked; paint(); };
+    $('#eQr').onchange = e => { ed.showQr = e.target.checked; paint(); };
+
+    const checkUnfilled = () => {
+      const resolved = resolveLiveTokens(ed);
+      return [resolved.to, resolved.heading, resolved.subject, resolved.body].some(s => /‹[^›]+›/.test(s || ''));
+    };
+
+    $('#eSave').onclick = async () => {
+      ed = await op('saveLetter', ed);
+      toast('Saved & synced to Master Register.');
+      viewEdit();
+    };
+
+    if ($('#eIssue')) $('#eIssue').onclick = async () => {
+      if (checkUnfilled() && !confirm('Some [placeholders] are still unfilled. Issue official Ref. No. anyway?')) return;
+      const next = Core.peekRef(db, 'out', ed.date, ed.majorHead).ref;
+      if (!confirm(`Assign Official Ref. No. ${next} under Major Head [${ed.majorHead}]?`)) return;
+      ed = await op('saveLetter', ed);
+      ed = await op('issueLetter', { id: ed.id, date: ed.date });
+      const resolved = resolveLiveTokens(ed);
+      Object.assign(ed, { to: resolved.to, heading: resolved.heading, subject: resolved.subject, body: resolved.body });
+      ed = await op('saveLetter', ed);
+      toast(`Issued Official Ref. No. ${ed.ref}`);
+      viewEdit();
+    };
+
+    if ($('#eSendAppr')) $('#eSendAppr').onclick = async () => {
+      const note = prompt('Optional note for Principal (प्राचार्य के लिए संक्षिप्त टिप्पणी):', '') ?? '';
+      ed = await op('saveLetter', ed);
+      ed = await op('submitForApproval', { id: ed.id, note });
+      toast('Sent to Principal Approval Queue!');
+      viewEdit();
+    };
+
+    if ($('#eApproveNow')) $('#eApproveNow').onclick = async () => {
+      const next = Core.peekRef(db, 'out', ed.date, ed.majorHead).ref;
+      if (!confirm(`Approve & Issue Official Ref. No. ${next}?`)) return;
+      ed = await op('saveLetter', ed);
+      ed = await op('approveAndIssueLetter', { id: ed.id, date: ed.date, showSign: true });
+      const resolved = resolveLiveTokens(ed);
+      Object.assign(ed, { to: resolved.to, heading: resolved.heading, subject: resolved.subject, body: resolved.body });
+      ed = await op('saveLetter', ed);
+      toast(`Approved & Issued Ref. No. ${ed.ref}`);
+      viewEdit();
+    };
+
+    $('#eDocx').onclick = () => {
+      const payload = resolveLiveTokens(ed);
+      downloadBinary('/api/export/docx', 'POST', { letter: payload }, `Letter_${ed.ref || 'Draft'}.docx`);
+    };
+
+    $('#ePdf').onclick = () => {
+      const payload = resolveLiveTokens(ed);
+      downloadBinary('/api/export/pdf', 'POST', { letter: payload }, `Letter_${ed.ref || 'Draft'}.pdf`);
+    };
+
+    $('#ePrint').onclick = async () => {
+      if (!ed.ref && !confirm('Print without an official Ref. No. (as unnumbered draft)?')) return;
+      window.print();
+    };
+
+    if ($('#eShareWa')) $('#eShareWa').onclick = async () => {
+      await ensureQrLoadedForLetter(ed);
+      const qInfo = cachedQrMap[ed.id] || {};
+      const share = window.DraftStudio.buildDispatchShareLinks(db, resolveLiveTokens(ed), qInfo.verifyUrl || '');
+      modal(`
+        <h3>📲 Dispatch via WhatsApp / Official Email</h3>
+        <p class="mut" style="margin-top:-4px">Download the signed PDF first, then click WhatsApp or Email below to send the formatted official message + verification link.</p>
+        <textarea id="shTxt" rows="7">${esc(share.text)}</textarea>
+        <div class="bar" style="margin-top:10px">
+          <a href="${esc(share.waUrl)}" target="_blank" rel="noopener" class="btn ok" style="text-decoration:none">📲 Open WhatsApp</a>
+          <a href="${esc(share.mailUrl)}" class="btn pri" style="text-decoration:none">✉️ Open Official Email</a>
+          <button id="shCopy">📋 Copy Message</button>
+          <span class="sp"></span>
+          <button id="shClose">Close</button>
+        </div>
+      `);
+      $('#shCopy').onclick = () => { navigator.clipboard.writeText($('#shTxt').value); toast('Copied to clipboard!'); };
+      $('#shClose').onclick = closeModal;
+    };
+
+    $('#eDup').onclick = () => {
+      const c = JSON.parse(JSON.stringify(ed));
+      Object.assign(c, { id: Core.uid(), date: Core.todayISO(), status: 'draft' });
+      delete c.ref; delete c.refNo; delete c.refYear; delete c.issuedAt; delete c.dispatch; delete c.cancelReason;
+      ed = c;
+      toast('Copied as new draft.');
+      viewEdit();
+    };
+
+    if ($('#eCancel')) $('#eCancel').onclick = async () => {
+      const reason = prompt(`Reason for cancelling Ref. No. ${ed.ref}:`);
+      if (reason === null) return;
+      ed = await op('cancelLetter', { id: ed.id, reason });
+      toast(`Cancelled ${ed.ref}`);
+      viewEdit();
+    };
+  }
+
+  // ==================== 4. SHEET & FUZZY SEARCH REGISTER (Fuse.js) ====================
+  function viewSheet() {
+    const years = [...new Set(db.letters.map(l => l.refYear || (l.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+    let rows = db.letters.filter(l => {
+      if (sheetF.year && String(l.refYear || (l.date || '').slice(0, 4)) !== String(sheetF.year)) return false;
+      if (sheetF.status && l.status !== sheetF.status) return false;
+      if (sheetF.majorHead && (l.majorHead || 'ADM') !== sheetF.majorHead) return false;
+      return true;
+    });
+
+    if (sheetF.q.trim()) {
+      if (sheetF.fuzzy && window.Fuse) {
+        const fuse = new window.Fuse(rows, {
+          keys: ['ref', 'to', 'subject', 'heading', 'body', 'majorHead', 'subHead', 'remarks', 'fields.name'],
+          threshold: 0.35,
+          ignoreLocation: true,
+        });
+        rows = fuse.search(sheetF.q.trim()).map(r => r.item);
+      } else {
+        const q = sheetF.q.toLowerCase();
+        rows = rows.filter(l =>
+          [l.ref, l.to, l.subject, l.heading, l.body, l.majorHead, l.subHead, l.remarks]
+            .some(x => String(x || '').toLowerCase().includes(q))
+        );
+      }
+    } else {
+      rows.sort((a, b) => (b.refYear || 0) - (a.refYear || 0) || (b.refNo || 0) - (a.refNo || 0) || (b.updatedAt || 0) - (a.updatedAt || 0));
+    }
+
+    const headSummary = (db.settings.majorHeads || Core.DEFAULT_MAJOR_HEADS).map(h => ({
+      code: h.code,
+      en: h.en,
+      count: db.letters.filter(l => (l.majorHead || 'ADM') === h.code && l.status !== 'cancelled').length,
+    })).filter(x => x.count > 0);
+
+    const gs = db.settings.gsheet || {};
+    const el = $('#view');
+    el.innerHTML = `
+      <div class="bar">
+        <div>
+          <h2 style="margin:0">📑 Searchable Register &amp; Sheet Sync (Fuse.js)</h2>
+          <small class="mut">Auto-saved to <code>data/Master_Letter_Register.xlsx</code> (4 Sheets: Outward, Inward, Major Heads, Students)</small>
+        </div>
+        <span class="sp"></span>
+        <button class="ok" id="shDlXlsx">📊 Download Excel (.xlsx)</button>
+        <button class="pri" id="shDlPdf">📕 Register PDF (.pdf)</button>
+        <button id="shSyncGs">☁️ Sync Google Sheets</button>
+        ${auth.user.role === 'admin' ? `<label class="btn" style="margin:0;cursor:pointer">📥 Import Excel<input type="file" id="shImpXlsx" accept=".xlsx" hidden></label>` : ''}
+      </div>
+
+      ${headSummary.length ? `
+        <div class="card" style="padding:10px 14px">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <b style="font-size:12px">Quick Filter by Major Head:</b>
+            <button class="sm ${!sheetF.majorHead ? 'pri' : ''}" data-hchip="">All (${db.letters.length})</button>
+            ${headSummary.map(h => `<button class="sm ${sheetF.majorHead === h.code ? 'pri' : ''}" data-hchip="${esc(h.code)}">${esc(h.code)}: ${h.count}</button>`).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="card">
+        <div class="row g">
+          <label>Search Letter No., Subject, Body, Student/Recipient
+            <input id="shQ" placeholder="e.g. 321/26, Scholarship, DEO, अनिता…" value="${esc(sheetF.q)}">
+          </label>
+          <label>Major Head (मद)
+            <select id="shHead">${headOptionsHtml(sheetF.majorHead, 'All Major Heads')}</select>
+          </label>
+          <label>Year
+            <select id="shYear">
+              <option value="">All Years</option>
+              ${years.map(y => `<option ${String(sheetF.year) === String(y) ? 'selected' : ''}>${y}</option>`).join('')}
+            </select>
+          </label>
+          <label>Status
+            <select id="shStatus">
+              <option value="">All Status</option>
+              ${['issued', 'dispatched', 'pending_approval', 'draft', 'returned', 'cancelled'].map(s => `<option value="${s}" ${sheetF.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <div class="bar" style="margin:6px 0 0">
+          <label class="chk"><input type="checkbox" id="shFuzzy" ${sheetF.fuzzy ? 'checked' : ''}> 🔍 <b>Fuse.js Smart Typo-Tolerant Search</b></label>
+          <span class="sp"></span>
+          <span class="mut">Showing <b>${rows.length}</b> record(s) ${gs.lastSyncStatus ? `· ☁️ ${esc(gs.lastSyncStatus)}` : ''}</span>
+        </div>
+      </div>
+
+      <div class="card table-wrap">
+        <table class="tbl">
           <thead>
             <tr>
-              <th>Letter No. (पत्रांक)</th>
+              <th>Letter / Ref. No.</th>
               <th>Date</th>
-              <th>Major Head (मुख्य शीर्ष)</th>
-              <th>Sub-Head / File</th>
-              <th>Recipient (प्राप्तकर्ता)</th>
-              <th>Subject (विषय)</th>
-              <th>Status &amp; Dispatch</th>
-              <th>Actions / Download</th>
+              <th>Major Head</th>
+              <th>Sub-Head</th>
+              <th>Recipient / Party</th>
+              <th>Subject / Heading</th>
+              <th>Status</th>
+              <th>Exports</th>
             </tr>
           </thead>
           <tbody>
-            ${filtered.map(l => {
-              const mh = Core.getMajorHeadObj(Store.db, l.majorHead);
-              return `<tr data-id="${esc(l.id)}">
+            ${rows.map(l => {
+              const mh = Core.getMajorHeadObj(db, l.majorHead);
+              return `<tr>
                 <td><b>${esc(l.ref || 'DRAFT')}</b></td>
-                <td>${esc(fmtD(l.date))}</td>
-                <td><span class="head-badge" title="${esc(mh ? mh.hi : '')}">${esc(l.majorHead || 'ADM')}</span> <small>${esc(mh ? mh.en : '')}</small></td>
+                <td>${esc(Core.fmtDateDMY(l.date))}</td>
+                <td><span class="pill p-head" title="${esc(mh.en)} / ${esc(mh.hi)}">${esc(mh.code)}</span></td>
                 <td>${esc(l.subHead || '—')}</td>
-                <td>${esc(party(l))}</td>
-                <td>${esc(String(l.subject || l.heading || '').replace(/‹([^›]+)›/g, '[$1]'))}${l.editedAfterIssue ? ' <span class="chip cancelled">edited</span>' : ''}</td>
-                <td>${statusChip(l.status)}${l.dispatch ? `<br><small>${esc(l.dispatch.mode)} · ${esc(fmtD(l.dispatch.date))}</small>` : ''}</td>
-                <td class="act">
-                  <button data-a="docx" title="Download Word (.docx)">📄 .docx</button>
-                  <button data-a="pdf" title="Download PDF (.pdf)">📕 .pdf</button>
-                  <button data-a="print" title="Print A4">🖨</button>
-                  ${Session.can('write') && l.status === 'issued' ? `<button data-a="disp" title="Mark Dispatched">✉</button>` : ''}
+                <td>${esc((l.to || '').split('\n')[0] || (l.fields && l.fields.name) || '—')}</td>
+                <td>${esc(l.subject || l.heading || '—')}</td>
+                <td><span class="pill p-${l.status}">${esc(l.status)}</span></td>
+                <td class="acts">
+                  <button class="sm" data-open="${l.id}">Open</button>
+                  <button class="sm ok" data-docx="${l.id}">.docx</button>
+                  <button class="sm pri" data-pdf="${l.id}">.pdf</button>
                 </td>
               </tr>`;
-            }).join('') || `<tr><td colspan="8" class="mut" style="text-align:center;padding:20px">No matching letters found (कोई पत्र नहीं मिला)।</td></tr>`}
+            }).join('') || '<tr><td colspan="8" class="mut">No matching records.</td></tr>'}
           </tbody>
         </table>
       </div>
-      <p class="mut" style="margin-top:8px">Showing <b>${filtered.length}</b> of ${L.length} record(s)</p>
     `;
 
-    $$('#rows tr[data-id]').forEach(tr => {
-      tr.onclick = (e) => {
-        const id = tr.dataset.id;
-        const a = e.target.dataset.a;
-        const l = Store.db.letters.find(x => x.id === id);
-        if (!l) return;
-        if (a === 'docx') { e.stopPropagation(); return downloadFromApi(`api/export/docx?id=${encodeURIComponent(id)}`, null, `Letter_${l.ref || 'Draft'}.docx`); }
-        if (a === 'pdf') { e.stopPropagation(); return downloadFromApi(`api/export/pdf?id=${encodeURIComponent(id)}`, null, `Letter_${l.ref || 'Draft'}.pdf`); }
-        if (a === 'print') { e.stopPropagation(); return printHTML(letterHTML(l, true)); }
-        if (a === 'disp') { e.stopPropagation(); return dispatchDlg(id); }
-        go('editor', clone(l));
-      };
-    });
-  };
+    $('#shQ').oninput = e => { sheetF.q = e.target.value; viewSheet(); };
+    $('#shHead').onchange = e => { sheetF.majorHead = e.target.value; viewSheet(); };
+    $('#shYear').onchange = e => { sheetF.year = e.target.value; viewSheet(); };
+    $('#shStatus').onchange = e => { sheetF.status = e.target.value; viewSheet(); };
+    $('#shFuzzy').onchange = e => { sheetF.fuzzy = e.target.checked; viewSheet(); };
+    $$('[data-hchip]', el).forEach(b => b.onclick = () => { sheetF.majorHead = b.dataset.hchip; viewSheet(); });
 
-  $$('.head-pill').forEach(p => { p.onclick = () => { S.head = p.dataset.h; viewOut(); }; });
-  $('#q').oninput = e => { S.q = e.target.value; draw(); };
-  $('#headSel').onchange = e => { S.head = e.target.value; viewOut(); };
-  $('#subQ').oninput = e => { S.subHead = e.target.value; draw(); };
-  $('#st').onchange = e => { S.status = e.target.value; draw(); };
-  $('#yr').onchange = e => { S.year = e.target.value; draw(); };
-  $('#fDate').onchange = e => { S.fromDate = e.target.value; draw(); };
-  $('#tDate').onchange = e => { S.toDate = e.target.value; draw(); };
-  $('#clrF').onclick = () => { S.q = ''; S.head = ''; S.subHead = ''; S.status = ''; S.year = ''; S.fromDate = ''; S.toDate = ''; viewOut(); };
+    $('#shDlXlsx').onclick = () => {
+      const qs = new URLSearchParams({ majorHead: sheetF.majorHead, status: sheetF.status, year: sheetF.year, q: sheetF.q }).toString();
+      downloadBinary(`/api/export/register-xlsx?${qs}`, 'GET', null, `Letter_Register_${Core.todayISO()}.xlsx`);
+    };
+    $('#shDlPdf').onclick = () => {
+      downloadBinary('/api/export/register-pdf', 'POST', { ids: rows.map(r => r.id), title: 'Filtered Letter Register' }, `Register_${Core.todayISO()}.pdf`);
+    };
+    $('#shSyncGs').onclick = async () => {
+      if (!db.settings.gsheet || !db.settings.gsheet.webhookUrl) {
+        toast('Configure Google Sheets Apps Script URL in ⚙️ Settings first.');
+        return go('set');
+      }
+      try {
+        const res = await api('/api/gsheet/sync', {});
+        toast(res.status || 'Synced to Google Sheets!');
+        await reloadDb();
+        viewSheet();
+      } catch (err) { toast(err.message); }
+    };
 
-  $('#btnXlsx').onclick = () => {
-    const qs = buildFilterQuery();
-    downloadFromApi('api/export/xlsx' + (qs ? '?' + qs : ''), null, `Letter_Register_${Core.todayISO()}.xlsx`);
-  };
-  $('#btnRegPdf').onclick = () => {
-    const qs = buildFilterQuery();
-    downloadFromApi('api/export/register-pdf' + (qs ? '?' + qs : ''), null, `Letter_Register_${Core.todayISO()}.pdf`);
-  };
-
-  const btnImp = $('#btnImp');
-  const impInput = $('#impXlsx');
-  if (btnImp && impInput) {
-    btnImp.onclick = () => impInput.click();
-    impInput.onchange = async (e) => {
+    if ($('#shImpXlsx')) $('#shImpXlsx').onchange = async e => {
       const f = e.target.files[0];
       if (!f) return;
-      try {
-        const buf = await f.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        let binary = '';
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        const res = await apiJson('api/import/xlsx', { method: 'POST', body: JSON.stringify({ base64: btoa(binary) }) });
-        await Store.reload();
-        toast(`Imported ${res.importedCount} record(s) from Excel ✓`);
-        viewOut();
-      } catch (err) {
-        toast(err.message, true);
-      }
+      const ab = await f.arrayBuffer();
+      const bytes = new Uint8Array(ab);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      const r = await api('/api/import/register-xlsx', { base64: btoa(bin) });
+      db = r.db;
+      toast(`Imported ${r.added} new letter record(s) from Excel.`);
+      viewSheet();
     };
+
+    $$('[data-open]', el).forEach(b => b.onclick = () => { ed = JSON.parse(JSON.stringify(db.letters.find(x => x.id === b.dataset.open))); go('edit'); });
+    $$('[data-docx]', el).forEach(b => b.onclick = () => {
+      const l = db.letters.find(x => x.id === b.dataset.docx);
+      downloadBinary('/api/export/docx', 'POST', { letter: resolveLiveTokens(l) }, `Letter_${l.ref || 'Draft'}.docx`);
+    });
+    $$('[data-pdf]', el).forEach(b => b.onclick = () => {
+      const l = db.letters.find(x => x.id === b.dataset.pdf);
+      downloadBinary('/api/export/pdf', 'POST', { letter: resolveLiveTokens(l) }, `Letter_${l.ref || 'Draft'}.pdf`);
+    });
   }
 
-  const qsBtn = $('#btnQuickSync');
-  if (qsBtn) {
-    qsBtn.onclick = async () => {
-      try {
-        toast('Syncing with Google Sheet…');
-        const r = await apiJson('api/gsheet/sync', { method: 'POST', body: JSON.stringify({}) });
-        toast('Google Sheet Synced ✓ (' + r.lastSyncStatus + ')');
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
+  // ==================== 5. OUTWARD REGISTER + 1-CLICK REMINDER ====================
+  function viewOut() {
+    const years = [...new Set(db.letters.map(l => l.refYear).filter(Boolean))].sort((a, b) => b - a);
+    const q = outF.q.trim().toLowerCase();
+    const rows = db.letters.filter(l => {
+      if (outF.year && String(l.refYear) !== String(outF.year)) return false;
+      if (outF.status && l.status !== outF.status) return false;
+      if (outF.majorHead && (l.majorHead || 'ADM') !== outF.majorHead) return false;
+      if (q && ![l.ref, l.to, l.subject, l.heading, l.majorHead, l.subHead, l.remarks].some(x => (x || '').toLowerCase().includes(q))) return false;
+      return true;
+    }).sort((a, b) => (b.refYear || 0) - (a.refYear || 0) || (b.refNo || 999999) - (a.refNo || 999999));
 
-  draw();
-}
-
-/* ---------- 4. INWARD REGISTER ---------- */
-function viewIn() {
-  const heads = Store.db.settings.majorHeads || Core.DEFAULT_MAJOR_HEADS;
-  const R = Store.db.inward.slice().reverse().filter(r => {
-    if (S.inHead && (r.majorHead || 'ADM') !== S.inHead) return false;
-    if (S.inQ) {
-      const hay = [r.no, r.from, r.subject, r.senderRef, r.subHead, r.remarks].join(' ').toLowerCase();
-      if (!hay.includes(S.inQ.toLowerCase())) return false;
-    }
-    return true;
-  });
-
-  $('#main').innerHTML = `
-    <div class="row between">
-      <h2 style="margin:0">📥 Inward Letter Register (आवक पत्र पंजी — प्राप्त पत्र)</h2>
-      <button class="ok" id="inwXlsx">📊 Download Full Excel (.xlsx)</button>
-    </div>
-
-    ${Session.can('write') ? `
-      <form id="inf" class="card" style="margin-top:12px">
-        <h3>+ Log Received Letter (प्राप्त पत्र दर्ज करें)</h3>
+    const el = $('#view');
+    el.innerHTML = `
+      <div class="bar">
+        <h2 style="margin:0">📤 Outward Register (जावक पंजी)</h2>
+        <span class="sp"></span>
+        <button id="oExportXlsx" class="ok">📊 Export .xlsx</button>
+        <button id="oPrintReg" class="pri">📕 Register PDF</button>
+      </div>
+      <div class="card">
         <div class="row g">
-          <label>From / Sender Office (प्रेषक कार्यालय/व्यक्ति)<input name="from" required placeholder="e.g. District Education Officer, Dumka"></label>
-          <label>Subject (विषय)<input name="subject" required placeholder="Subject of received letter..."></label>
-          <label>Major Head (मुख्य शीर्ष)
-            <select name="majorHead">
-              ${heads.map(h => `<option value="${esc(h.code)}">${esc(h.code)} — ${esc(h.en)} (${esc(h.hi)})</option>`).join('')}
+          <input id="oQ" placeholder="Search Ref. No., recipient, subject…" value="${esc(outF.q)}">
+          <select id="oHead">${headOptionsHtml(outF.majorHead, 'All Major Heads')}</select>
+          <select id="oY"><option value="">All Years</option>${years.map(y => `<option ${String(outF.year) === String(y) ? 'selected' : ''}>${y}</option>`).join('')}</select>
+          <select id="oS"><option value="">All Status</option>${['issued', 'dispatched', 'pending_approval', 'draft', 'cancelled'].map(s => `<option value="${s}" ${outF.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="card table-wrap">
+        <table class="tbl">
+          <thead><tr><th>Ref. No.</th><th>Date</th><th>Head</th><th>Recipient</th><th>Subject</th><th>Status / Dispatch</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${rows.map(l => `<tr>
+              <td><b>${esc(l.ref || '—')}</b></td>
+              <td>${esc(Core.fmtDateDMY(l.date))}</td>
+              <td><span class="pill p-head">${esc(l.majorHead || 'ADM')}</span></td>
+              <td>${esc((l.to || '').split('\n')[0] || (l.fields && l.fields.name) || '—')}</td>
+              <td>${esc(l.subject || l.heading || '—')}${l.awaitingReply && !l.reply ? '<br><small style="color:#d97706">⏳ Reply Awaited</small>' : ''}</td>
+              <td>
+                <span class="pill p-${l.status}">${esc(l.status)}</span>
+                ${l.dispatch ? `<div class="mut">${esc(l.dispatch.mode)} ${esc(l.dispatch.tracking || '')}</div>` : ''}
+              </td>
+              <td class="acts">
+                <button class="sm" data-open="${l.id}">Open</button>
+                ${l.ref && l.status !== 'cancelled' ? `<button class="sm" data-disp="${l.id}">Dispatch</button><button class="sm warn-btn" data-rem="${l.id}" title="Draft Official Reminder Letter">🔔 Reminder</button>` : ''}
+                ${!l.ref && auth.user.role === 'admin' ? `<button class="sm danger" data-del="${l.id}">Delete</button>` : ''}
+              </td>
+            </tr>`).join('') || '<tr><td colspan="7" class="mut">No matching letters.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    $('#oQ').oninput = e => { outF.q = e.target.value; viewOut(); };
+    $('#oHead').onchange = e => { outF.majorHead = e.target.value; viewOut(); };
+    $('#oY').onchange = e => { outF.year = e.target.value; viewOut(); };
+    $('#oS').onchange = e => { outF.status = e.target.value; viewOut(); };
+    $('#oExportXlsx').onclick = () => downloadBinary('/api/export/register-xlsx', 'GET', null, `Outward_Register_${Core.todayISO()}.xlsx`);
+    $('#oPrintReg').onclick = () => downloadBinary('/api/export/register-pdf', 'POST', { ids: rows.map(r => r.id) }, `Outward_Register_${Core.todayISO()}.pdf`);
+
+    $$('[data-open]', el).forEach(b => b.onclick = () => { ed = JSON.parse(JSON.stringify(db.letters.find(x => x.id === b.dataset.open))); go('edit'); });
+    $$('[data-del]', el).forEach(b => b.onclick = async () => {
+      if (!confirm('Delete this unissued draft?')) return;
+      await op('deleteLetter', { id: b.dataset.del });
+      viewOut();
+    });
+
+    // 1-Click Official Reminder Generator
+    $$('[data-rem]', el).forEach(b => b.onclick = () => {
+      const orig = db.letters.find(x => x.id === b.dataset.rem);
+      const rem = newFromTemplate('rem', orig.lang || 'en');
+      rem.majorHead = orig.majorHead || 'ADM';
+      rem.subHead = orig.subHead || '';
+      rem.to = orig.to || '';
+      rem.fields = {
+        prev_ref: orig.ref || '',
+        prev_date: orig.date || '',
+        subject: orig.subject || '',
+        rem_no: 'I',
+        matter: orig.lang === 'hi'
+          ? 'कृपया पूर्व प्रेषित पत्र पर वांछित कार्रवाई/प्रत्युत्तर यथाशीघ्र उपलब्ध कराने की कृपा की जाए।'
+          : 'Kindly expedite the needful action / response on the aforementioned reference at the earliest.',
+      };
+      applyTemplate(rem);
+      if (orig.to) rem.to = orig.to;
+      ed = rem;
+      go('edit');
+      toast(`Drafted Reminder referencing Letter ${orig.ref}`);
+    });
+
+    $$('[data-disp]', el).forEach(b => b.onclick = () => {
+      const l = db.letters.find(x => x.id === b.dataset.disp);
+      const d = l.dispatch || { mode: 'By Hand / Peon Book', date: Core.todayISO(), tracking: '' };
+      modal(`
+        <h3>📮 Dispatch &amp; Follow-up — Ref. ${esc(l.ref)}</h3>
+        <div class="row g">
+          <label>Dispatch Mode
+            <select id="dMode">${['By Hand / Peon Book', 'Speed Post', 'Registered Post', 'Email', 'WhatsApp', 'Special Messenger'].map(m => `<option ${m === d.mode ? 'selected' : ''}>${m}</option>`).join('')}</select>
+          </label>
+          <label>Dispatch Date<input type="date" id="dDate" value="${esc(d.date || Core.todayISO())}"></label>
+        </div>
+        <label>Receipt / Consignment / Peon Book Entry<input id="dTrk" value="${esc(d.tracking || '')}"></label>
+        <label class="chk" style="margin:8px 0"><input type="checkbox" id="dAwait" ${l.awaitingReply ? 'checked' : ''}> ⏳ Mark as "Reply Awaited" (उत्तर प्रतीक्षित)</label>
+        <label>Reply Received Note<input id="dRep" value="${esc(l.reply || '')}" placeholder="e.g. Sanction received vide Memo 55 dt 25/11/2026"></label>
+        <div class="bar" style="margin-top:10px">
+          <span class="sp"></span>
+          <button id="dCancel">Close</button>
+          <button class="pri" id="dSave">Save</button>
+        </div>
+      `);
+      $('#dCancel').onclick = closeModal;
+      $('#dSave').onclick = async () => {
+        await op('patchLetter', {
+          id: l.id,
+          patch: {
+            dispatch: { mode: $('#dMode').value, date: $('#dDate').value, tracking: $('#dTrk').value },
+            awaitingReply: $('#dAwait').checked,
+            reply: $('#dRep').value,
+          },
+        });
+        closeModal();
+        viewOut();
+      };
+    });
+  }
+
+  // ==================== 6. INWARD REGISTER + OFFLINE OCR + SLA TRACKER ====================
+  function viewInw() {
+    const q = inwF.q.trim().toLowerCase();
+    const rows = db.inward.filter(r => {
+      if (inwF.status && r.status !== inwF.status) return false;
+      if (inwF.majorHead && (r.majorHead || 'ADM') !== inwF.majorHead) return false;
+      if (inwF.priority && (r.priority || 'normal') !== inwF.priority) return false;
+      if (q && ![r.no, r.from, r.senderRef, r.subject, r.majorHead, r.ocrText].some(x => (x || '').toLowerCase().includes(q))) return false;
+      return true;
+    }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+    const el = $('#view');
+    el.innerHTML = `
+      <div class="bar">
+        <div>
+          <h2 style="margin:0">📥 Inward Register + Offline Hindi/English OCR + SLA Tracker</h2>
+          <small class="mut">Upload any incoming paper letter photo → Offline Tesseract OCR auto-extracts Memo No., Sender &amp; Subject + tracks RTI/Urgent deadlines</small>
+        </div>
+        <span class="sp"></span>
+        <button class="ok" id="iScanBtn">📷 Scan Paper Letter (Offline OCR)</button>
+        <button class="pri" id="iAdd">+ Log Inward Manually</button>
+      </div>
+
+      <div class="card">
+        <div class="row g">
+          <input id="iQ" placeholder="Search Inward No., sender, subject, or scanned OCR text…" value="${esc(inwF.q)}">
+          <select id="iHead">${headOptionsHtml(inwF.majorHead, 'All Major Heads')}</select>
+          <select id="iPrio">
+            <option value="">All Priorities</option>
+            ${Core.INWARD_PRIORITIES.map(p => `<option value="${p.id}" ${inwF.priority === p.id ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}
+          </select>
+          <select id="iS">
+            <option value="">All Status</option>
+            <option value="pending" ${inwF.status === 'pending' ? 'selected' : ''}>Reply Pending</option>
+            <option value="replied" ${inwF.status === 'replied' ? 'selected' : ''}>Replied</option>
+            <option value="noaction" ${inwF.status === 'noaction' ? 'selected' : ''}>Filed / Info Only</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card table-wrap">
+        <table class="tbl">
+          <thead><tr><th>Inward No.</th><th>Received</th><th>Priority &amp; SLA</th><th>Head</th><th>From &amp; Sender Ref</th><th>Subject</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${rows.map(r => {
+              const sla = Core.inwardDeadlineMeta(r);
+              const slaBadge = sla.overdue
+                ? `<span class="pill p-overdue">🚨 ${esc(sla.label)}</span>`
+                : (sla.dueSoon ? `<span class="pill p-duesoon">⏰ ${esc(sla.label)}</span>` : (r.dueDate ? `<small class="mut">Due: ${esc(Core.fmtDateDMY(r.dueDate))}</small>` : '—'));
+              return `<tr>
+                <td><b>${esc(r.no)}</b></td>
+                <td>${esc(Core.fmtDateDMY(r.date))}</td>
+                <td><b>${esc((r.priority || 'normal').toUpperCase())}</b><br>${slaBadge}</td>
+                <td><span class="pill p-head">${esc(r.majorHead || 'ADM')}</span></td>
+                <td><b>${esc(r.from)}</b><br><small class="mut">${esc(r.senderRef || '')}</small></td>
+                <td>${esc(r.subject)}</td>
+                <td><span class="pill p-${r.status}">${esc(r.reply ? 'replied · ' + r.reply.ref : r.status)}</span></td>
+                <td class="acts">
+                  ${r.attachment ? `<button class="sm" data-scan="${esc(r.attachment)}" data-ocr="${esc(r.ocrText || '')}">🖼 Scan</button>` : ''}
+                  ${r.status !== 'replied' ? `<button class="sm pri" data-rep="${r.id}">↩ Draft Reply</button>` : ''}
+                  <button class="sm" data-edit="${r.id}">Edit</button>
+                  ${auth.user.role === 'admin' ? `<button class="sm danger" data-del="${r.id}">🗑</button>` : ''}
+                </td>
+              </tr>`;
+            }).join('') || '<tr><td colspan="8" class="mut">No inward letters logged yet. Click "📷 Scan Paper Letter (Offline OCR)" or "+ Log Inward Manually".</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    $('#iQ').oninput = e => { inwF.q = e.target.value; viewInw(); };
+    $('#iHead').onchange = e => { inwF.majorHead = e.target.value; viewInw(); };
+    $('#iPrio').onchange = e => { inwF.priority = e.target.value; viewInw(); };
+    $('#iS').onchange = e => { inwF.status = e.target.value; viewInw(); };
+    $('#iAdd').onclick = () => openInwardForm();
+    $('#iScanBtn').onclick = () => openInwardForm(null, true);
+
+    $$('[data-edit]', el).forEach(b => b.onclick = () => openInwardForm(db.inward.find(x => x.id === b.dataset.edit)));
+    $$('[data-del]', el).forEach(b => b.onclick = async () => {
+      if (!confirm('Delete this inward entry?')) return;
+      await op('deleteInward', { id: b.dataset.del });
+      viewInw();
+    });
+    $$('[data-scan]', el).forEach(b => b.onclick = () => {
+      modal(`
+        <h3>🖼 Attached Paper Scan &amp; OCR Text</h3>
+        <img src="${esc(b.dataset.scan)}" style="max-width:100%;border:1px solid #cbd5e1;border-radius:8px">
+        ${b.dataset.ocr ? `<label style="margin-top:10px">Extracted OCR Text<textarea rows="5" readonly>${esc(b.dataset.ocr)}</textarea></label>` : ''}
+        <div class="bar" style="margin-top:10px"><span class="sp"></span><button id="scClose">Close</button></div>
+      `);
+      $('#scClose').onclick = closeModal;
+    });
+    $$('[data-rep]', el).forEach(b => b.onclick = () => {
+      const r = db.inward.find(x => x.id === b.dataset.rep);
+      const l = newFromTemplate('reply', 'en');
+      l.majorHead = r.majorHead || 'ADM';
+      l.subHead = r.subHead || '';
+      l.replyTo = r.id;
+      l.to = r.from;
+      l.fields = {
+        sender_ref: r.senderRef || r.no,
+        inward_date: r.date,
+        subject: r.subject,
+        reply_body: 'Point-wise compliance / information is respectfully submitted as follows:',
+      };
+      applyTemplate(l);
+      l.to = r.from;
+      ed = l;
+      go('edit');
+    });
+  }
+
+  function openInwardForm(r, autoTriggerScan = false) {
+    const x = r || {
+      id: Core.uid(),
+      date: Core.todayISO(),
+      majorHead: 'ADM',
+      subHead: '',
+      priority: 'normal',
+      dueDate: Core.addDaysISO(Core.todayISO(), 7),
+      from: '',
+      senderRef: '',
+      subject: '',
+      needsReply: true,
+      attachment: '',
+      ocrText: '',
+    };
+
+    modal(`
+      <h3>${r ? 'Edit Inward ' + esc(x.no) : '📥 Log Inward Letter + Optional Offline OCR Scan'}</h3>
+
+      <div style="background:#f0fdf4;border:1px dashed #22c55e;border-radius:8px;padding:10px;margin-bottom:10px">
+        <div class="bar" style="margin:0">
+          <div>
+            <b style="color:#166534">📷 Smart Offline Paper Scan (Hindi + English OCR)</b>
+            <div class="mut">Upload photo/scan (PNG/JPG/WEBP) — runs 100% locally via Tesseract.js</div>
+          </div>
+          <span class="sp"></span>
+          <label class="btn ok" style="margin:0;cursor:pointer">📤 Select Scan Image<input type="file" id="fScanInput" accept="image/png,image/jpeg,image/webp" hidden></label>
+        </div>
+        <div id="ocrStatus" class="mut" style="margin-top:6px">${x.attachment ? '✅ Scan attached (' + esc(x.attachment) + ')' : ''}</div>
+      </div>
+
+      <div class="row g">
+        <label>Received Date<input type="date" id="fDate" value="${esc(x.date)}"></label>
+        <label>Priority Tier (प्राथमिकता)
+          <select id="fPrio">
+            ${Core.INWARD_PRIORITIES.map(p => `<option value="${p.id}" data-days="${p.days}" ${x.priority === p.id ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}
+          </select>
+        </label>
+        <label>SLA Due Date (अंतिम तिथि)
+          <input type="date" id="fDue" value="${esc(x.dueDate || '')}">
+        </label>
+      </div>
+      <div class="row g">
+        <label>Major Head (मुख्य शीर्ष) *<select id="fHead">${headOptionsHtml(x.majorHead || 'ADM')}</select></label>
+        <label>Sub-Head / File No.<input id="fSub" value="${esc(x.subHead || '')}"></label>
+      </div>
+      <label>Received From (प्रेषक कार्यालय / नाम) *<input id="fFrom" value="${esc(x.from)}" placeholder="e.g. District Education Officer, Dumka"></label>
+      <label>Sender's Memo / Letter No. &amp; Date<input id="fSref" value="${esc(x.senderRef)}" placeholder="e.g. Memo 412/Dumka dt. 14/11/2026"></label>
+      <label>Subject (विषय) *<textarea id="fSubj" rows="2">${esc(x.subject)}</textarea></label>
+      <label class="chk" style="margin:8px 0"><input type="checkbox" id="fNeed" ${x.needsReply ? 'checked' : ''}> Action / Reply Required (track SLA countdown)</label>
+
+      <div class="bar" style="margin-top:10px">
+        <span class="sp"></span>
+        <button id="fClose">Cancel</button>
+        <button class="pri" id="fSave">💾 Save Inward Entry</button>
+      </div>
+    `);
+
+    let curAttachment = x.attachment || '';
+    let curOcrText = x.ocrText || '';
+
+    const updateDueFromPrio = () => {
+      const sel = $('#fPrio');
+      const opt = sel.options[sel.selectedIndex];
+      const days = parseInt(opt.dataset.days, 10) || 7;
+      $('#fDue').value = Core.addDaysISO($('#fDate').value || Core.todayISO(), days);
+    };
+    $('#fPrio').onchange = updateDueFromPrio;
+
+    $('#fScanInput').onchange = async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      $('#ocrStatus').textContent = '⏳ Running offline Hindi + English OCR… कृपया प्रतीक्षा करें';
+      try {
+        const dataUrl = await fileToDataUrl(f, 5 * 1024 * 1024);
+        const res = await api('/api/inward/ocr', { dataUrl, saveScan: true });
+        curAttachment = res.attachment || '';
+        curOcrText = res.rawText || '';
+        if (res.from && !$('#fFrom').value) $('#fFrom').value = res.from;
+        if (res.senderRef && !$('#fSref').value) $('#fSref').value = res.senderRef;
+        if (res.subject && !$('#fSubj').value) $('#fSubj').value = res.subject;
+        if (res.majorHead) $('#fHead').value = res.majorHead;
+        if (res.priority) { $('#fPrio').value = res.priority; updateDueFromPrio(); }
+        $('#ocrStatus').textContent = `✅ Scan saved & OCR extracted (${curOcrText.length} chars)! Fields auto-filled.`;
+      } catch (err) {
+        $('#ocrStatus').textContent = '❌ OCR error: ' + err.message;
+      }
+    };
+
+    if (autoTriggerScan) {
+      setTimeout(() => $('#fScanInput').click(), 100);
+    }
+
+    $('#fClose').onclick = closeModal;
+    $('#fSave').onclick = async () => {
+      try {
+        await op('saveInward', {
+          id: x.id,
+          date: $('#fDate').value,
+          priority: $('#fPrio').value,
+          dueDate: $('#fDue').value,
+          majorHead: $('#fHead').value,
+          subHead: $('#fSub').value.trim(),
+          from: $('#fFrom').value.trim(),
+          senderRef: $('#fSref').value.trim(),
+          subject: $('#fSubj').value.trim(),
+          needsReply: $('#fNeed').checked,
+          attachment: curAttachment,
+          ocrText: curOcrText,
+        });
+        closeModal();
+        toast('Inward letter logged & synced.');
+        viewInw();
+      } catch (err) { toast(err.message); }
+    };
+  }
+
+  // ==================== 7. TEMPLATES GALLERY ====================
+  function viewTpl() {
+    const el = $('#view');
+    const customList = db.customTemplates || [];
+    el.innerHTML = `
+      <div class="bar">
+        <h2 style="margin:0">🧩 Official Bilingual Templates (${allTemplates().length})</h2>
+        <span class="sp"></span>
+        <button class="pri" id="btnNewTpl">+ Create Custom Template</button>
+      </div>
+      <div class="stats" style="grid-template-columns:repeat(auto-fill,minmax(275px,1fr))">
+        ${allTemplates().map(t => `
+          <div class="card" style="margin:0">
+            <div class="bar" style="margin-bottom:4px">
+              <span class="pill p-head">${esc(t.majorHead || 'ADM')}</span>
+              <small class="mut">${esc(t.layout.toUpperCase())}</small>
+            </div>
+            <h3 style="margin-bottom:6px">${esc(t.name)}</h3>
+            <p class="mut" style="margin:0 0 10px">${esc((t.fields || []).length)} placeholders · EN + हिंदी</p>
+            <div class="bar" style="margin:0">
+              <button class="pri sm" data-use="${esc(t.id)}" data-l="en">Draft EN</button>
+              <button class="ok sm" data-use="${esc(t.id)}" data-l="hi">हिंदी में बनाएँ</button>
+              ${t.custom && auth.user.role === 'admin' ? `<button class="danger sm" data-deltpl="${esc(t.id)}">🗑</button>` : ''}
+            </div>
+          </div>`).join('')}
+      </div>
+    `;
+    $$('[data-use]', el).forEach(b => b.onclick = () => { ed = newFromTemplate(b.dataset.use, b.dataset.l); go('edit'); });
+    $$('[data-deltpl]', el).forEach(b => b.onclick = async () => {
+      if (!confirm('Delete custom template?')) return;
+      await op('deleteCustomTemplate', { id: b.dataset.deltpl });
+      viewTpl();
+    });
+    $('#btnNewTpl').onclick = () => {
+      modal(`
+        <h3>+ Create Custom Bilingual Template</h3>
+        <div class="row g">
+          <label>Template Name *<input id="ctName" placeholder="e.g. Hostel Gate Pass"></label>
+          <label>Major Head<select id="ctHead">${headOptionsHtml('ADM')}</select></label>
+          <label>Layout<select id="ctLay"><option value="letter">Official Letter</option><option value="notice">Notice</option><option value="cert">Certificate</option></select></label>
+        </div>
+        <label>Custom Placeholders (comma-separated keys)<input id="ctFields" placeholder="student_name, class, reason"></label>
+        <label>English Subject / Heading<input id="ctEnSubj"></label>
+        <label>English Body<textarea id="ctEnBody" rows="3"></textarea></label>
+        <label>हिंदी विषय / शीर्षक<input id="ctHiSubj"></label>
+        <label>हिंदी मुख्य विषय-वस्तु<textarea id="ctHiBody" rows="3"></textarea></label>
+        <div class="bar"><span class="sp"></span><button id="ctCancel">Cancel</button><button class="pri" id="ctSave">Save Template</button></div>
+      `);
+      $('#ctCancel').onclick = closeModal;
+      $('#ctSave').onclick = async () => {
+        const fKeys = $('#ctFields').value.split(',').map(s => s.trim().replace(/[^a-zA-Z0-9_]/g, '')).filter(Boolean);
+        const lay = $('#ctLay').value;
+        await op('saveCustomTemplate', {
+          name: $('#ctName').value.trim(),
+          majorHead: $('#ctHead').value,
+          layout: lay,
+          fields: fKeys.map(k => ({ k, l: k.replace(/_/g, ' ').toUpperCase(), t: 'text' })),
+          en: { heading: lay !== 'letter' ? $('#ctEnSubj').value : '', subject: lay === 'letter' ? $('#ctEnSubj').value : '', body: $('#ctEnBody').value },
+          hi: { heading: lay !== 'letter' ? $('#ctHiSubj').value : '', subject: lay === 'letter' ? $('#ctHiSubj').value : '', body: $('#ctHiBody').value },
+        });
+        closeModal();
+        viewTpl();
+      };
+    };
+  }
+
+  // ==================== 8. USERS & SECURITY (ADMIN ONLY) ====================
+  async function viewUsers() {
+    if (auth.user.role !== 'admin') return go('dash');
+    const data = await api('/api/users');
+    const el = $('#view');
+    el.innerHTML = `
+      <div class="bar">
+        <h2 style="margin:0">👥 Users, Roles &amp; Security Audit</h2>
+        <span class="sp"></span>
+        <button class="pri" id="uAdd">+ Add Office User</button>
+      </div>
+      <div class="card table-wrap">
+        <table class="tbl">
+          <thead><tr><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${data.users.map(u => `<tr>
+              <td><b>${esc(u.username)}</b></td>
+              <td>${esc(u.displayName)}</td>
+              <td><span class="pill ${u.role === 'admin' ? 'p-issued' : 'p-dispatched'}">${esc(u.role)}</span></td>
+              <td>${u.active !== false ? '✅ Active' : '🚫 Disabled'}</td>
+              <td>${u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'Never'}</td>
+              <td class="acts">
+                <button class="sm" data-rst="${u.id}" data-un="${esc(u.username)}">Reset Pass</button>
+                ${u.id !== auth.user.id ? `<button class="sm danger" data-udel="${u.id}">Remove</button>` : ''}
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>🛡 Recent Security &amp; Document Audit Log</h3>
+        <div class="table-wrap" style="max-height:300px;overflow-y:auto">
+          <table class="tbl">
+            <thead><tr><th>Timestamp</th><th>Action</th><th>Actor</th><th>IP</th><th>Detail</th></tr></thead>
+            <tbody>
+              ${(data.audit || []).map(a => `<tr>
+                <td><small>${esc(a.ts)}</small></td>
+                <td><b>${esc(a.action)}</b></td>
+                <td>${esc(a.actor)}</td>
+                <td><small>${esc(a.ip)}</small></td>
+                <td>${esc(a.detail)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    $('#uAdd').onclick = () => {
+      modal(`
+        <h3>+ Create Office User Account</h3>
+        <label>Full Name &amp; Designation<input id="nuDisp" placeholder="e.g. Shri Manoj Kumar (Office Clerk)"></label>
+        <label>Username<input id="nuUser" placeholder="clerk1"></label>
+        <label>Role
+          <select id="nuRole">
+            <option value="staff">Office Staff (Draft, Directory, Scan OCR, Submit for Approval)</option>
+            <option value="admin">Administrator / Principal (Full Approval, Sign, Cancel &amp; Settings)</option>
+          </select>
+        </label>
+        <label>Initial Password (min 8 chars)<input type="password" id="nuPass"></label>
+        <div class="bar"><span class="sp"></span><button id="nuCancel">Cancel</button><button class="pri" id="nuSave">Create</button></div>
+      `);
+      $('#nuCancel').onclick = closeModal;
+      $('#nuSave').onclick = async () => {
+        try {
+          await api('/api/users', { displayName: $('#nuDisp').value, username: $('#nuUser').value, role: $('#nuRole').value, password: $('#nuPass').value });
+          closeModal();
+          toast('User created.');
+          viewUsers();
+        } catch (err) { toast(err.message); }
+      };
+    };
+
+    $$('[data-rst]', el).forEach(b => b.onclick = async () => {
+      const np = prompt(`New password for "${b.dataset.un}" (min 8 chars):`);
+      if (!np) return;
+      await api('/api/users/update', { id: b.dataset.rst, newPassword: np });
+      toast('Password reset.');
+    });
+    $$('[data-udel]', el).forEach(b => b.onclick = async () => {
+      if (!confirm('Remove this user?')) return;
+      await api('/api/users/delete', { id: b.dataset.udel });
+      viewUsers();
+    });
+  }
+
+  // ==================== 9. SETTINGS ====================
+  function fileToDataUrl(file, maxBytes = 4 * 1024 * 1024) {
+    return new Promise((res, rej) => {
+      if (file.size > maxBytes) return rej(new Error('Image exceeds maximum size limit.'));
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+  }
+
+  function viewSet() {
+    const isAdmin = auth.user.role === 'admin';
+    const S = JSON.parse(JSON.stringify(db.settings));
+    const yk = Core.yearKey(Core.todayISO(), S.yearMode);
+    const el = $('#view');
+
+    el.innerHTML = `
+      <div class="bar">
+        <h2 style="margin:0">⚙️ Institution, Workflow, QR &amp; Sheet Settings</h2>
+        <span class="sp"></span>
+        ${isAdmin ? '<button class="pri" id="sSave">💾 Save All Settings</button>' : '<span class="mut">Read-only for Staff</span>'}
+      </div>
+
+      <div class="card">
+        <h3>1. Institution Identity</h3>
+        <div class="row g">
+          <label>Header Title<input id="sName" value="${esc(S.school.name)}"></label>
+          <label>Sub-Title<input id="sSubName" value="${esc(S.school.subName || '')}"></label>
+        </div>
+        <div class="row g">
+          <label>Name in English<input id="sEn" value="${esc(S.school.en)}"></label>
+          <label>हिंदी में विद्यालय का नाम<input id="sHi" value="${esc(S.school.hi)}"></label>
+        </div>
+        <div class="row g">
+          <label>Address (English)<input id="sAddrEn" value="${esc(S.school.addressEn)}"></label>
+          <label>पता (हिंदी)<input id="sAddrHi" value="${esc(S.school.addressHi)}"></label>
+        </div>
+        <div class="row g">
+          <label>U-DISE Code<input id="sUdise" value="${esc(S.school.udise)}"></label>
+          <label>CBSE Affiliation No.<input id="sCbse" value="${esc(S.school.cbseAff || '')}"></label>
+          <label>Est. Year<input id="sEstd" value="${esc(S.school.estd || '')}"></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>2. Approval Policy, QR Verification &amp; Print Typography</h3>
+        <div class="row g">
+          <label>Font Family
+            <select id="sFontFam">
+              <option value="karma" ${S.fontFamily === 'karma' ? 'selected' : ''}>Karma Serif (Formal Official Hindi + English)</option>
+              <option value="mukta" ${S.fontFamily === 'mukta' ? 'selected' : ''}>Mukta Sans (Modern Clean Hindi + English)</option>
+            </select>
+          </label>
+          <label>Font Size (pt)<input type="number" id="sFpt" min="10" max="15" step="0.5" value="${S.fontPt}"></label>
+          <label>Signature Alignment
+            <select id="sAlign">
+              <option value="right" ${S.sigAlign === 'right' ? 'selected' : ''}>Right Aligned (Standard)</option>
+              <option value="left" ${S.sigAlign === 'left' ? 'selected' : ''}>Left Aligned</option>
             </select>
           </label>
         </div>
         <div class="row g">
-          <label>Sub-Head / File No.<input name="subHead" placeholder="Optional file head"></label>
-          <label>Sender Letter No. &amp; Date<input name="senderRef" placeholder="e.g. Memo 412 dt 15/11/2026"></label>
-          <label>Received Date<input name="date" type="date" value="${esc(Core.todayISO())}"></label>
-          <label>Mode
-            <select name="mode"><option>By Hand</option><option>Speed Post</option><option>Post</option><option>Email</option><option>WhatsApp</option></select>
+          <label>Public Verification Base URL (optional, for printed QR codes when hosted on cloud domain)
+            <input id="sPubUrl" value="${esc(S.publicBaseUrl || '')}" placeholder="Leave blank to auto-detect current server address">
           </label>
-          <label class="chk"><input name="needsReply" type="checkbox" checked> Reply Needed (उत्तर अपेक्षित)</label>
-          <button class="pri" style="margin-bottom:8px">+ Add Entry</button>
         </div>
-      </form>
-    ` : ''}
+        <div class="bar" style="margin-top:6px">
+          <label class="chk"><input type="checkbox" id="sReqAppr" ${S.requireApprovalForStaff ? 'checked' : ''}> <b>Require Principal Approval</b> before Office Staff can issue Ref. Nos.</label>
+          <label class="chk"><input type="checkbox" id="sDefQr" ${S.defaultShowQr !== false ? 'checked' : ''}> Enable Tamper-Proof QR Code by default</label>
+          <label class="chk"><input type="checkbox" id="sPrep" ${S.preprinted ? 'checked' : ''}> Pre-printed Letterhead Paper</label>
+        </div>
+      </div>
 
-    <div class="row g" style="margin:10px 0">
-      <label style="flex:2"><input id="inQ" placeholder="Search inward no, sender, subject…" value="${esc(S.inQ)}"></label>
-      <label>
-        <select id="inHead">
-          <option value="">All Major Heads</option>
-          ${heads.map(h => `<option value="${esc(h.code)}" ${S.inHead === h.code ? 'selected' : ''}>${esc(h.code)} — ${esc(h.en)}</option>`).join('')}
-        </select>
-      </label>
-    </div>
+      <div class="card">
+        <h3>3. Reference Numbering &amp; Counters</h3>
+        <div class="row g">
+          <label>Outward Ref Format (supports <code>{n}</code>, <code>{yy}</code>, <code>{yyyy}</code>, <code>{sess}</code>, <code>{head}</code>)
+            <input id="sFmt" value="${esc(S.refFormat)}">
+          </label>
+          <label>Inward Format<input id="sInFmt" value="${esc(S.inFormat)}"></label>
+          <label>Zero-Pad Width<input type="number" id="sPad" min="0" max="6" value="${S.padWidth}"></label>
+        </div>
+        ${isAdmin ? `
+        <div class="row g" style="margin-top:6px">
+          <label>Last Issued Outward Serial (${yk})<input type="number" id="cOut" min="0" value="${db.counters['out|' + yk] || 0}"></label>
+          <button id="cSet">Set Counter</button>
+        </div>` : ''}
+      </div>
 
-    <div class="table-wrap">
-      <table class="tb">
-        <thead>
-          <tr>
-            <th>Inward No.</th>
-            <th>Date</th>
-            <th>Major Head</th>
-            <th>From (प्रेषक)</th>
-            <th>Subject (विषय)</th>
-            <th>Sender Ref.</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${R.map(r => `
-            <tr data-id="${esc(r.id)}">
-              <td><b>${esc(r.no)}</b></td>
-              <td>${esc(fmtD(r.date))}</td>
-              <td><span class="head-badge">${esc(r.majorHead || 'ADM')}</span>${r.subHead ? `<br><small>${esc(r.subHead)}</small>` : ''}</td>
-              <td>${esc(r.from)}</td>
-              <td>${esc(r.subject)}</td>
-              <td>${esc(r.senderRef || '—')}</td>
-              <td>${statusChip(r.status)} ${r.reply ? `<br><small>Outward: <b>${esc(r.reply.ref)}</b></small>` : ''}</td>
-              <td class="act">
-                ${Session.can('write') && r.status === 'pending' ? `<button data-a="reply" class="pri sm">↩ Draft Reply</button>` : ''}
-                ${Session.can('admin') ? `<button data-a="del" class="danger sm" title="Delete">✕</button>` : ''}
-              </td>
-            </tr>
-          `).join('') || `<tr><td colspan="8" class="mut" style="text-align:center;padding:18px">No inward letters recorded yet.</td></tr>`}
-        </tbody>
-      </table>
-    </div>
-  `;
+      <div class="card">
+        <h3>4. Signatories &amp; Live Signature Stamp (हस्ताक्षरकर्ता)</h3>
+        <div id="sigList"></div>
+        ${isAdmin ? '<button id="sigAdd">+ Add Signatory</button>' : ''}
+      </div>
 
-  $('#inwXlsx').onclick = () => downloadFromApi('api/export/xlsx', null, `Master_Letter_Register_${Core.todayISO()}.xlsx`);
-  $('#inQ').oninput = e => { S.inQ = e.target.value; viewIn(); };
-  $('#inHead').onchange = e => { S.inHead = e.target.value; viewIn(); };
+      <div class="card">
+        <h3>5. Google Sheets Live Cloud Sync</h3>
+        <div class="row g">
+          <label class="chk"><input type="checkbox" id="gsEn" ${S.gsheet.enabled ? 'checked' : ''}> Enable Google Sheets Webhook Sync</label>
+          <label class="chk"><input type="checkbox" id="gsAuto" ${S.gsheet.autoSync ? 'checked' : ''}> Auto-sync on every save</label>
+        </div>
+        <div class="row g">
+          <label>Google Apps Script Web App URL (<code>https://script.google.com/macros/s/.../exec</code>)
+            <input id="gsUrl" value="${esc(S.gsheet.webhookUrl || '')}">
+          </label>
+          <label>Shared Secret<input id="gsSec" value="${esc(S.gsheet.webhookSecret || '')}"></label>
+        </div>
+      </div>
 
-  const inf = $('#inf');
-  if (inf) {
-    inf.onsubmit = async (e) => {
-      e.preventDefault();
-      const fd = new FormData(inf);
-      await Store.op('saveInward', {
-        id: Core.uid(),
-        from: fd.get('from'),
-        subject: fd.get('subject'),
-        majorHead: fd.get('majorHead'),
-        subHead: fd.get('subHead'),
-        senderRef: fd.get('senderRef'),
-        date: fd.get('date'),
-        mode: fd.get('mode'),
-        needsReply: fd.get('needsReply') === 'on',
+      <div class="card">
+        <h3>6. Encrypted Full Backup &amp; Restore</h3>
+        <div class="bar">
+          <button class="pri" id="bDown">⬇ Download Full JSON Backup</button>
+          ${isAdmin ? `<label class="btn" style="margin:0;cursor:pointer">⬆ Restore JSON Backup<input type="file" id="bUp" accept="application/json" hidden></label>` : ''}
+        </div>
+      </div>
+    `;
+
+    const drawSigs = () => {
+      $('#sigList').innerHTML = S.signatories.map((g, i) => `
+        <div class="card" style="background:#f8fafc">
+          <div class="row g">
+            <label>Name (EN)<input data-sg="${i}" data-k="name" value="${esc(g.name)}"></label>
+            <label>नाम (HI)<input data-sg="${i}" data-k="nameHi" value="${esc(g.nameHi || '')}"></label>
+            <label>Designation (EN)<input data-sg="${i}" data-k="designation" value="${esc(g.designation)}"></label>
+            <label>पदनाम (HI)<input data-sg="${i}" data-k="designationHi" value="${esc(g.designationHi || '')}"></label>
+          </div>
+          <div class="bar" style="margin:6px 0 0">
+            ${g.stamp ? `<img src="${esc(g.stamp)}" style="max-height:42px;border:1px solid #cbd5e0;background:#fff;padding:2px">` : '<span class="mut">No stamp</span>'}
+            ${isAdmin ? `
+              <button class="sm pri" data-drawsg="${i}">✍️ Draw Live Signature</button>
+              <label class="btn sm" style="margin:0;cursor:pointer">📤 Upload PNG<input type="file" data-sgf="${i}" accept="image/*" hidden></label>
+            ` : ''}
+            <label class="chk"><input type="radio" name="defSig" ${S.defaultSignatory === g.id ? 'checked' : ''} data-sgd="${i}"> Default</label>
+            <span class="sp"></span>
+            ${S.signatories.length > 1 && isAdmin ? `<button class="sm danger" data-sgx="${i}">Remove</button>` : ''}
+          </div>
+        </div>`).join('');
+
+      $$('[data-sg]').forEach(inp => inp.oninput = () => { S.signatories[+inp.dataset.sg][inp.dataset.k] = inp.value; });
+      $$('[data-sgd]').forEach(r => r.onchange = () => { S.defaultSignatory = S.signatories[+r.dataset.sgd].id; });
+      $$('[data-sgx]').forEach(b => b.onclick = () => { S.signatories.splice(+b.dataset.sgx, 1); drawSigs(); });
+      $$('[data-drawsg]').forEach(b => b.onclick = () => {
+        const idx = +b.dataset.drawsg;
+        window.ModulesUI.openSignaturePadModal(makeUiCtx(), {
+          title: `Draw Official Signature for ${S.signatories[idx].name}`,
+          onSigned: async (dataUrl) => {
+            const up = await api('/api/upload-image', { dataUrl, kind: 'stamp' });
+            S.signatories[idx].stamp = up.url;
+            drawSigs();
+            toast('Live signature saved to protected server storage. Click Save All Settings.');
+          },
+        });
       });
-      toast('Inward letter recorded ✓');
-      viewIn();
+      $$('[data-sgf]').forEach(inp => inp.onchange = async e => {
+        const f = e.target.files[0]; if (!f) return;
+        const dataUrl = await fileToDataUrl(f);
+        const up = await api('/api/upload-image', { dataUrl, kind: 'stamp' });
+        S.signatories[+inp.dataset.sgf].stamp = up.url;
+        drawSigs();
+      });
     };
-  }
+    drawSigs();
 
-  $$('tbody tr[data-id]').forEach(tr => {
-    tr.onclick = async (e) => {
-      const a = e.target.dataset.a;
-      const r = Store.db.inward.find(x => x.id === tr.dataset.id);
-      if (!r) return;
-      if (a === 'reply') {
-        e.stopPropagation();
-        go('editor', newLetter({
-          tpl: 'reply',
-          majorHead: r.majorHead || 'ADM',
-          subHead: r.subHead || '',
-          to: r.from,
-          fields: { inward_ref: r.senderRef || r.no, topic: r.subject },
-          replyTo: r.id,
-        }));
-      } else if (a === 'del' && confirm('Delete this inward entry?')) {
-        e.stopPropagation();
-        await Store.op('deleteInward', { id: r.id });
-        viewIn();
-      }
+    if ($('#sigAdd')) $('#sigAdd').onclick = () => {
+      S.signatories.push({ id: Core.uid(), name: '', nameHi: '', designation: '', designationHi: '', org: S.school.en, orgHi: S.school.hi, stamp: '' });
+      drawSigs();
     };
-  });
-}
 
-/* ---------- 5. GOOGLE SHEETS & EXCEL SYNC HUB ---------- */
-function viewSync() {
-  const gs = Store.db.settings.gsheet || {};
-  const info = Store.serverInfo || {};
-  const isAdmin = Session.can('admin');
+    if ($('#cSet')) $('#cSet').onclick = async () => {
+      const n = parseInt($('#cOut').value, 10);
+      if (!confirm(`Set last issued number for ${yk} to ${n}?`)) return;
+      await op('setCounter', { series: 'out', year: yk, last: n });
+      toast('Counter updated.');
+    };
 
-  $('#main').innerHTML = `
-    <h2>☁ Google Sheets &amp; Excel Register Auto-Save (गूगल शीट एवं एक्सेल डेटाबेस सिंक)</h2>
-
-    <div class="card">
-      <h3>1. Automatic Local Master Excel Workbook (<code>data/Master_Letter_Register.xlsx</code>)</h3>
-      <p class="mut" style="margin:0 0 12px">
-        हर पत्र सेव या जारी होते ही सर्वर पर 3 शीट वाली असली Excel फ़ाइल (<b>Outward Register</b>, <b>Inward Register</b>, और <b>Major Head Summary</b>) स्वतः अपडेट होती है — जिसमें <b>Letter No. (पत्रांक)</b> और <b>Major Head (मुख्य शीर्ष)</b> पर Auto-Filter लगा होता है।
-      </p>
-      <div class="row">
-        <button class="ok" id="syncDlXlsx">📊 Download Master Excel Workbook (.xlsx)</button>
-        <span class="mut">Status: <b>${info.masterExcelReady ? '● Active & Auto-Saving' : 'Initializing'}</b></span>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>2. Live Google Sheets Auto-Sync (गूगल शीट में स्वतः डेटा सेव करें)</h3>
-      <p class="mut" style="margin:0 0 12px">
-        इसे चालू करने पर हर नया पत्रांक (Letter No.), दिनांक, मुख्य शीर्ष (Major Head), प्राप्तकर्ता और विषय सीधे आपकी <b>Google Sheet</b> में सेव होता रहेगा, जहाँ से आप कहीं भी मोबाइल या पीसी पर <code>Ctrl+F</code> या फ़िल्टर से खोज सकते हैं।
-      </p>
-      <div class="row g">
-        <label style="flex:2">Google Apps Script Web App URL (<code>https://script.google.com/macros/s/.../exec</code>)
-          <input id="gsUrl" value="${esc(gs.webhookUrl || '')}" placeholder="https://script.google.com/macros/s/.../exec" ${!isAdmin ? 'disabled' : ''}>
-        </label>
-        <label style="max-width:220px">Optional Secret Key (सुरक्षा कुंजी)
-          <input id="gsSecret" type="password" value="${esc(gs.webhookSecret || '')}" placeholder="Optional shared secret" ${!isAdmin ? 'disabled' : ''}>
-        </label>
-      </div>
-      <div class="row">
-        <label class="chk" style="margin-top:4px"><input id="gsEnabled" type="checkbox" ${gs.enabled ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''}> Enable Google Sheets Sync</label>
-        <label class="chk" style="margin-top:4px"><input id="gsAuto" type="checkbox" ${gs.autoSync !== false ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''}> Auto-sync whenever a letter is issued/updated</label>
-      </div>
-      <div class="row" style="margin-top:10px">
-        ${isAdmin ? `<button class="pri" id="saveGs">💾 Save Google Sheet Config</button>` : ''}
-        ${Session.can('write') ? `<button class="ok" id="testGs">☁ Test &amp; Sync All Records Now</button>` : ''}
-        <span class="mut">Last Sync: <b>${gs.lastSyncAt ? new Date(gs.lastSyncAt).toLocaleString() + ' — ' + esc(gs.lastSyncStatus || 'OK') : 'Not synced yet'}</b></span>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row between">
-        <h3 style="margin:0">📋 2-Minute Google Sheet Setup Guide (गूगल शीट कैसे जोड़ें — बेहद आसान)</h3>
-        <button class="sm pri" id="copyScript">📋 Copy Apps Script Code</button>
-      </div>
-      <ol style="font-size:13px;line-height:1.7;padding-left:20px;margin:10px 0">
-        <li>अपने Google अकाउंट में एक नई <b>Google Sheet</b> खोलें (<code>sheets.new</code>)।</li>
-        <li>ऊपर मेनू में <b>Extensions → Apps Script</b> पर क्लिक करें।</li>
-        <li>वहाँ नीचे दिया गया कोड कॉपी करके पेस्ट करें और <b>Save (💾)</b> दबाएँ।</li>
-        <li>ऊपर दाईं ओर <b>Deploy → New deployment</b> चुनें → Type: <b>Web app</b> → <i>Execute as: Me</i> → <i>Who has access: Anyone</i> → <b>Deploy</b> करें और मिला हुआ <code>https://script.google.com/macros/s/.../exec</code> URL ऊपर बॉक्स में पेस्ट कर दें!</li>
-      </ol>
-      <pre class="codebox" id="gsCodeBox">${esc(info.appsScriptTemplate || '')}</pre>
-    </div>
-  `;
-
-  $('#syncDlXlsx').onclick = () => downloadFromApi('api/export/xlsx', null, `Master_Letter_Register_${Core.todayISO()}.xlsx`);
-
-  const saveGs = $('#saveGs');
-  if (saveGs) {
-    saveGs.onclick = async () => {
-      const s = clone(Store.db.settings);
-      s.gsheet = Object.assign({}, s.gsheet, {
-        webhookUrl: $('#gsUrl').value.trim(),
-        webhookSecret: $('#gsSecret').value.trim(),
-        enabled: $('#gsEnabled').checked,
+    if ($('#sSave')) $('#sSave').onclick = async () => {
+      Object.assign(S.school, {
+        name: $('#sName').value, subName: $('#sSubName').value,
+        en: $('#sEn').value, hi: $('#sHi').value,
+        addressEn: $('#sAddrEn').value, addressHi: $('#sAddrHi').value,
+        udise: $('#sUdise').value, cbseAff: $('#sCbse').value, estd: $('#sEstd').value,
+      });
+      Object.assign(S, {
+        fontFamily: $('#sFontFam').value,
+        fontPt: +$('#sFpt').value || 12,
+        sigAlign: $('#sAlign').value,
+        publicBaseUrl: $('#sPubUrl').value.trim(),
+        requireApprovalForStaff: $('#sReqAppr').checked,
+        defaultShowQr: $('#sDefQr').checked,
+        preprinted: $('#sPrep').checked,
+        refFormat: $('#sFmt').value.trim(),
+        inFormat: $('#sInFmt').value.trim(),
+        padWidth: Math.max(0, Math.min(6, +$('#sPad').value || 0)),
+      });
+      Object.assign(S.gsheet, {
+        enabled: $('#gsEn').checked,
         autoSync: $('#gsAuto').checked,
+        webhookUrl: $('#gsUrl').value.trim(),
+        webhookSecret: $('#gsSec').value.trim(),
       });
-      await Store.op('saveSettings', s);
-      toast('Google Sheets configuration saved ✓');
-      viewSync();
+      await op('saveSettings', S);
+      toast('All settings saved!');
+    };
+
+    $('#bDown').onclick = async () => {
+      await op('markBackup', {});
+      const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `LetterDraft_v3_Backup_${Core.todayISO()}.json`;
+      a.click();
+    };
+    if ($('#bUp')) $('#bUp').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      if (!confirm('Replace current database with this backup?')) return;
+      const d = JSON.parse(await f.text());
+      await op('restore', d);
+      toast('Backup restored.');
+      go('dash');
     };
   }
 
-  const testGs = $('#testGs');
-  if (testGs) {
-    testGs.onclick = async () => {
-      try {
-        toast('Pushing register to Google Sheets…');
-        const payload = isAdmin ? {
-          webhookUrl: $('#gsUrl').value.trim(),
-          webhookSecret: $('#gsSecret').value.trim(),
-          enabled: $('#gsEnabled').checked,
-          autoSync: $('#gsAuto').checked,
-        } : {};
-        const r = await apiJson('api/gsheet/sync', { method: 'POST', body: JSON.stringify(payload) });
-        await Store.reload();
-        toast('Synced successfully! ' + r.lastSyncStatus);
-        viewSync();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
-
-  $('#copyScript').onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(info.appsScriptTemplate || '');
-      toast('Apps Script copied to clipboard ✓');
-    } catch (_) {
-      toast('Select and copy from the code box below.');
-    }
-  };
-}
-
-/* ---------- 6. USERS & SECURITY ---------- */
-async function viewSec() {
-  const isAdmin = Session.can('admin');
-  const u = Session.user;
-
-  $('#main').innerHTML = `
-    <h2>🔐 Login Security, Role Access &amp; Audit Trail (सुरक्षा एवं उपयोगकर्ता प्रबंधन)</h2>
-
-    <div class="card">
-      <div class="row between">
-        <div>
-          <h3 style="margin:0">👤 Signed-In Account: ${esc(u.displayName)} (<code>@${esc(u.username)}</code>)</h3>
-          <small class="mut">Role: <span class="chip ${esc(u.role)}">${esc(u.role.toUpperCase())}</span></small>
-        </div>
-        <button class="danger" id="logoutAllBtn">⏻ Sign Out From All Devices</button>
-      </div>
-      <hr style="border:0;border-top:1px solid var(--bd);margin:14px 0">
-      <form id="pwForm" class="row g">
-        <label>Current Password (वर्तमान पासवर्ड)<input name="currentPassword" type="password" required></label>
-        <label>New Strong Password (नया पासवर्ड — min 8 chars)<input name="newPassword" type="password" minlength="8" required></label>
-        <button class="pri" style="margin-bottom:8px">🔑 Change Password</button>
-      </form>
-    </div>
-
-    ${isAdmin ? `
-      <div class="card">
-        <div class="row between">
-          <h3 style="margin:0">👥 Authorized Office Users (कार्यालय उपयोगकर्ता खाते)</h3>
-          <button class="pri sm" id="addUserBtn">+ Add User Account</button>
-        </div>
-        <p class="mut" style="margin:6px 0 12px">
-          <b>Admin:</b> सभी अधिकार (सेटिंग, हस्ताक्षर अपलोड, रद्द करना, यूज़र प्रबंधन) ·
-          <b>Staff:</b> पत्र बनाना, जारी करना, डिस्पैच व डाउनलोड ·
-          <b>Viewer:</b> केवल पंजी खोजना एवं देखना।
-        </p>
-        <div id="usersBox"><p class="mut">Loading users…</p></div>
-      </div>
-
-      <div class="card">
-        <h3>🛡 Security &amp; Action Audit Log (सुरक्षा ऑडिट लॉग)</h3>
-        <div id="auditBox"><p class="mut">Loading audit logs…</p></div>
-      </div>
-    ` : ''}
-  `;
-
-  $('#logoutAllBtn').onclick = async () => {
-    if (!confirm('Sign out from all computers/phones immediately?')) return;
-    await apiJson('api/auth/logout', { method: 'POST', body: JSON.stringify({ allDevices: true }) }).catch(() => {});
-    Session.clear();
-    showAuthGate();
-  };
-
-  $('#pwForm').onsubmit = async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    try {
-      await apiJson('api/auth/password', {
-        method: 'POST',
-        body: JSON.stringify({ currentPassword: fd.get('currentPassword'), newPassword: fd.get('newPassword') }),
-      });
-      e.target.reset();
-      toast('Password updated successfully ✓');
-    } catch (err) {
-      toast(err.message, true);
-    }
-  };
-
-  if (isAdmin) {
-    loadAdminSecurityTables();
-    $('#addUserBtn').onclick = async () => {
-      const v = await ask('Create Authorized User (नया यूज़र जोड़ें)', [
-        { k: 'username', l: 'Username (e.g. clerk1, office_desk)', ph: 'clerk1' },
-        { k: 'displayName', l: 'Full Name & Designation', ph: 'Shri Mohan Lal (Office Clerk)' },
-        { k: 'role', l: 'Access Role (भूमिका)', type: 'select', opts: [
-          { v: 'staff', l: 'Staff (Draft, Issue, Dispatch & Download)' },
-          { v: 'viewer', l: 'Viewer (Search & View Only)' },
-          { v: 'admin', l: 'Admin (Full Principal/System Control)' },
-        ], v: 'staff' },
-        { k: 'password', l: 'Initial Password (कम से कम 8 अक्षर)', type: 'password' },
-      ], 'Create User');
-      if (!v) return;
-      try {
-        await apiJson('api/users', { method: 'POST', body: JSON.stringify(Object.assign({ action: 'create' }, v)) });
-        toast('User account created ✓');
-        loadAdminSecurityTables();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
-}
-
-async function loadAdminSecurityTables() {
-  try {
-    const [uRes, aRes] = await Promise.all([apiJson('api/users'), apiJson('api/audit')]);
-    const uBox = $('#usersBox');
-    if (uBox) {
-      uBox.innerHTML = `<div class="table-wrap"><table class="tb">
-        <thead><tr><th>Username</th><th>Full Name</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
-        <tbody>
-          ${uRes.users.map(x => `
-            <tr>
-              <td><code>@${esc(x.username)}</code></td>
-              <td><b>${esc(x.displayName)}</b></td>
-              <td><span class="chip ${esc(x.role)}">${esc(x.role.toUpperCase())}</span></td>
-              <td>${x.active ? '<span class="chip dispatched">Active</span>' : '<span class="chip cancelled">Disabled</span>'}</td>
-              <td>${x.lastLoginAt ? esc(new Date(x.lastLoginAt).toLocaleString()) : 'Never'}</td>
-              <td class="act">
-                <button class="sm" data-uact="pw" data-uid="${esc(x.id)}" data-un="${esc(x.username)}">🔑 Reset PW</button>
-                <button class="sm" data-uact="toggle" data-uid="${esc(x.id)}" data-active="${x.active ? '1' : '0'}">${x.active ? 'Disable' : 'Enable'}</button>
-                ${x.id !== Session.user.id ? `<button class="sm danger" data-uact="del" data-uid="${esc(x.id)}">✕</button>` : ''}
-              </td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table></div>`;
-
-      $$('[data-uact]', uBox).forEach(btn => {
-        btn.onclick = async () => {
-          const act = btn.dataset.uact;
-          const id = btn.dataset.uid;
-          try {
-            if (act === 'pw') {
-              const v = await ask(`Reset Password for @${btn.dataset.un}`, [{ k: 'pw', l: 'New Password (min 8 chars)', type: 'password' }], 'Reset Password');
-              if (!v || !v.pw) return;
-              await apiJson('api/users', { method: 'POST', body: JSON.stringify({ action: 'update', id, newPassword: v.pw }) });
-              toast('Password reset ✓');
-            } else if (act === 'toggle') {
-              const nextActive = btn.dataset.active !== '1';
-              await apiJson('api/users', { method: 'POST', body: JSON.stringify({ action: 'update', id, active: nextActive }) });
-              toast(nextActive ? 'User enabled' : 'User disabled');
-            } else if (act === 'del' && confirm('Permanently delete this user?')) {
-              await apiJson('api/users', { method: 'POST', body: JSON.stringify({ action: 'delete', id }) });
-              toast('User deleted');
-            }
-            loadAdminSecurityTables();
-          } catch (err) {
-            toast(err.message, true);
-          }
-        };
-      });
-    }
-
-    const aBox = $('#auditBox');
-    if (aBox) {
-      aBox.innerHTML = `<div class="table-wrap" style="max-height:320px;overflow-y:auto"><table class="tb">
-        <thead><tr><th>Time (UTC)</th><th>User</th><th>Role</th><th>Action</th><th>Details</th><th>IP</th></tr></thead>
-        <tbody>
-          ${aRes.logs.slice(0, 80).map(lg => `
-            <tr>
-              <td><small>${esc(lg.ts.replace('T', ' ').slice(0, 19))}</small></td>
-              <td><code>${esc(lg.actor)}</code></td>
-              <td>${esc(lg.role)}</td>
-              <td><b>${esc(lg.action)}</b></td>
-              <td>${esc(lg.detail)}</td>
-              <td><small>${esc(lg.ip)}</small></td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table></div>`;
-    }
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
-/* ---------- 7. SETTINGS, CUSTOM TEMPLATES & EASY DEPLOY GUIDE ---------- */
-function viewSet() {
-  const s = clone(Store.db.settings);
-  const nx = nextRefNow('ADM');
-  const isAdmin = Session.can('admin');
-  const lanUrls = (Store.serverInfo && Store.serverInfo.lanUrls) || [];
-
-  $('#main').innerHTML = `
-    <h2>⚙ Institution Settings, Placeholders &amp; Easy Deployment (सेटिंग एवं सरल डिप्लॉयमेंट)</h2>
-
-    <div class="card">
-      <h3>🚀 Deploy &amp; Access from Any Laptop, PC, Wi-Fi or Cloud (आसान होस्टिंग गाइड)</h3>
-      <div class="row g">
-        <div style="flex:1;min-width:250px">
-          <b>1. Local Windows / Mac / Linux PC (1-Click):</b>
-          <p class="mut" style="margin:4px 0">Windows पर <code>start.bat</code> पर डबल-क्लिक करें (या Linux/Mac पर <code>./start.sh</code>)। यह स्वतः निर्भरताएँ जाँचकर ब्राउज़र में ऐप खोल देगा।</p>
-          <b>2. Office Wi-Fi / LAN Sharing (एक ही नेटवर्क पर अन्य पीसी/मोबाइल):</b>
-          <p class="mut" style="margin:4px 0">
-            ${lanUrls.length ? `इस नेटवर्क पर अन्य डिवाइस से खोलें: ${lanUrls.map(u => `<code>${esc(u)}</code>`).join(' , ')}` : 'अपने ऑफिस वाई-फ़ाई से जुड़ने पर यहाँ LAN IP दिखेगा (<code>http://&lt;PC-IP&gt;:3000</code>)।'}
-          </p>
-        </div>
-        <div style="flex:1;min-width:250px">
-          <b>3. Cloud / Internet Hosting (Render · Railway · Docker):</b>
-          <p class="mut" style="margin:4px 0">
-            इस रिपॉज़िटरी में <code>Dockerfile</code>, <code>docker-compose.yml</code>, <code>render.yaml</code> और <code>railway.json</code> पहले से शामिल हैं — बस GitHub से जोड़कर 1-क्लिक में ऑनलाइन होस्ट करें या <code>cloudflared tunnel --url http://localhost:3000</code> चलाएँ!
-          </p>
-        </div>
-      </div>
-    </div>
-
-    ${!isAdmin ? `<div class="warn">Note: Only <b>Administrator</b> accounts can modify system settings, counters, or stamps.</div>` : ''}
-
-    <div class="card">
-      <h3>🏛 Institution Profile &amp; Global Placeholders (संस्था विवरण — सभी पत्रों में स्वतः प्रयुक्त)</h3>
-      <div class="row g">
-        <label>Header Name (English Caps)<input id="sc_name" value="${esc(s.school.name || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>Sub-Title<input id="sc_subName" value="${esc(s.school.subName || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-      </div>
-      <div class="row g">
-        <label>Institution Name — English (<code>{{school_name_en}}</code>)<input id="sc_en" value="${esc(s.school.en || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>संस्था का नाम — हिंदी (<code>{{school_name_hi}}</code>)<input id="sc_hi" value="${esc(s.school.hi || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-      </div>
-      <div class="row g">
-        <label>Address — English (<code>{{school_address_en}}</code>)<input id="sc_addrEn" value="${esc(s.school.addressEn || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>पता — हिंदी (<code>{{school_address_hi}}</code>)<input id="sc_addrHi" value="${esc(s.school.addressHi || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-      </div>
-      <div class="row g">
-        <label>U-DISE Code (<code>{{udise_code}}</code>)<input id="sc_udise" value="${esc(s.school.udise || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>CBSE Affiliation No. (<code>{{cbse_aff_no}}</code>)<input id="sc_cbse" value="${esc(s.school.cbseAff || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>Est. Year (<code>{{estd_year}}</code>)<input id="sc_estd" value="${esc(s.school.estd || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>Official Email<input id="sc_email" value="${esc(s.school.email || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>Phone<input id="sc_phone" value="${esc(s.school.phone || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>🔢 Reference Numbering (पत्रांक प्रारूप एवं अगला नंबर)</h3>
-      <div class="row g">
-        <label>Outward Format
-          <input id="refFormat" value="${esc(s.refFormat)}" ${!isAdmin ? 'disabled' : ''}>
-          <small>Tokens: <code>{n}</code> no · <code>{yy}</code> 26 · <code>{yyyy}</code> 2026 · <code>{sess}</code> 26-27 · <code>{head}</code> Major Head</small>
-        </label>
-        <label>Year Cycle
-          <select id="yearMode" ${!isAdmin ? 'disabled' : ''}>
-            <option value="calendar" ${s.yearMode === 'calendar' ? 'selected' : ''}>Calendar Year (Jan–Dec)</option>
-            <option value="session" ${s.yearMode === 'session' ? 'selected' : ''}>Academic/Financial (Apr–Mar)</option>
-          </select>
-        </label>
-        <label>Zero Padding<input id="padWidth" type="number" min="0" max="6" value="${esc(s.padWidth)}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>Inward Format<input id="inFormat" value="${esc(s.inFormat)}" ${!isAdmin ? 'disabled' : ''}></label>
-      </div>
-      ${isAdmin ? `
-        <div class="row g" style="margin-top:8px">
-          <label style="max-width:220px">Set Next Outward Number (अगला नंबर)<input id="nextN" type="number" min="1" value="${esc(nx.n)}"></label>
-          <button id="setN" style="margin-bottom:8px">Set Next Number</button>
-          <span class="mut" style="margin-bottom:12px">Next preview: <b>${esc(nx.ref)}</b></span>
-        </div>
-      ` : ''}
-    </div>
-
-    <div class="card">
-      <h3>🖨 Typography, Fonts &amp; Print Layout (फ़ॉन्ट एवं प्रिंट सेटिंग)</h3>
-      <div class="row g">
-        <label>Official Font Theme (PDF + Print + Preview)
-          <select id="fontFamily" ${!isAdmin ? 'disabled' : ''}>
-            <option value="karma" ${s.fontFamily !== 'mukta' ? 'selected' : ''}>Karma Official Serif (सरकारी सेरिफ़ — हिंदी + English)</option>
-            <option value="mukta" ${s.fontFamily === 'mukta' ? 'selected' : ''}>Mukta Clean Modern (आधुनिक मुक्ता — हिंदी + English)</option>
-          </select>
-        </label>
-        <label>Font Size (pt)
-          <select id="fontPt" ${!isAdmin ? 'disabled' : ''}>${[11, 12, 13, 14].map(x => `<option value="${x}" ${+s.fontPt === x ? 'selected' : ''}>${x} pt</option>`).join('')}</select>
-        </label>
-        <label>Signature Alignment
-          <select id="sigAlign" ${!isAdmin ? 'disabled' : ''}>
-            <option value="right" ${s.sigAlign === 'right' ? 'selected' : ''}>Right (दाईं ओर — मानक)</option>
-            <option value="left" ${s.sigAlign === 'left' ? 'selected' : ''}>Left (बाईं ओर)</option>
-          </select>
-        </label>
-        <label>Top Blank Space (mm, for pre-printed pad)<input id="topMm" type="number" min="10" max="100" value="${esc(s.topMm)}" ${!isAdmin ? 'disabled' : ''}></label>
-      </div>
-      <div class="row">
-        <label class="chk"><input id="preprinted" type="checkbox" ${s.preprinted ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''}> Printing on pre-printed letterhead pad</label>
-        <label class="chk"><input id="defaultShowSign" type="checkbox" ${s.defaultShowSign ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''}> Attach signature/stamp by default</label>
-        <label class="chk"><input id="showMajorHeadOnLetter" type="checkbox" ${s.showMajorHeadOnLetter ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''}> Print Major Head line below Ref. No.</label>
-      </div>
-      ${isAdmin ? `
-        <div class="row g" style="margin-top:10px">
-          <label>Upload Custom Letterhead Image (PNG/JPG)<input id="lhfile" type="file" accept="image/png,image/jpeg,image/webp"></label>
-          <button id="lhreset" class="ghost" style="margin-bottom:8px">Reset Default Letterhead</button>
-        </div>
-      ` : ''}
-    </div>
-
-    <div class="card">
-      <h3>🗂 Major Heads List (मुख्य शीर्ष / मद सूची — Excel व Google Sheet खोज के लिए)</h3>
-      <div id="mhList"></div>
-      ${isAdmin ? `<button id="addMh" class="sm">+ Add Major Head</button>` : ''}
-    </div>
-
-    <div class="card">
-      <h3>✍ Signatories &amp; Protected Stamps (हस्ताक्षरकर्ता एवं सुरक्षित मुहर)</h3>
-      <small class="mut" style="display:block;margin-bottom:8px">Uploaded signature/stamp images are stored outside <code>public/</code> and protected behind login.</small>
-      <div id="sgs"></div>
-      ${isAdmin ? `<button id="addsg" class="sm">+ Add Signatory</button>` : ''}
-    </div>
-
-    <div class="card">
-      <h3>📖 Address Book (पता सूची — कमांड में <code>@alias</code> लिखकर उपयोग करें)</h3>
-      <div id="rcs"></div>
-      ${isAdmin ? `<button id="addrc" class="sm">+ Add Addressee</button>` : ''}
-    </div>
-
-    ${isAdmin ? `<div class="row" style="margin-bottom:18px"><button class="pri" id="saveS" style="padding:10px 22px">💾 Save All Settings (सभी सेटिंग सहेजें)</button></div>` : ''}
-
-    <div class="card">
-      <div class="row between">
-        <h3 style="margin:0">🧩 Custom Reusable Templates (कस्टम टेम्पलेट बनाएँ)</h3>
-        ${Session.can('write') ? `<button class="sm pri" id="newCustTpl">+ Create Custom Template</button>` : ''}
-      </div>
-      <div id="custTplBox" style="margin-top:10px">
-        ${(Store.db.customTemplates || []).length
-          ? `<div class="table-wrap"><table class="tb"><thead><tr><th>ID</th><th>Major Head</th><th>Template Name</th><th>Placeholders</th><th></th></tr></thead><tbody>
-              ${Store.db.customTemplates.map(ct => `<tr>
-                <td><code>${esc(ct.id)}</code></td>
-                <td><span class="head-badge">${esc(ct.majorHead)}</span></td>
-                <td><b>${esc(ct.name)}</b></td>
-                <td>${(ct.fields || []).map(f => `<code>{{${esc(f.k)}}}</code>`).join(' ') || '—'}</td>
-                <td class="act">${isAdmin ? `<button class="sm danger" data-deltpl="${esc(ct.id)}">✕</button>` : ''}</td>
-              </tr>`).join('')}
-            </tbody></table></div>`
-          : `<p class="mut" style="margin:4px 0">No custom templates yet. You can create reusable templates with any <code>{{placeholder}}</code>!</p>`}
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>💾 Full System JSON Backup &amp; Restore (संपूर्ण डेटा बैकअप)</h3>
-      <div class="row g">
-        <button id="bkBtn">⬇ Download JSON Backup</button>
-        ${isAdmin ? `<label>Restore from JSON Backup<input id="rf" type="file" accept=".json"></label>` : ''}
-      </div>
-      <p class="mut">Automatic daily backups are also saved in <code>data/backups/</code> (last 30 days retained).</p>
-    </div>
-  `;
-
-  const renderMh = () => {
-    $('#mhList').innerHTML = s.majorHeads.map((h, i) => `
-      <div class="row g mhrow" data-i="${i}">
-        <label style="max-width:110px">Code<input data-f="code" value="${esc(h.code)}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>English Head<input data-f="en" value="${esc(h.en)}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>हिंदी शीर्ष<input data-f="hi" value="${esc(h.hi)}" ${!isAdmin ? 'disabled' : ''}></label>
-        ${isAdmin ? `<button class="ghost" data-delmh="${i}" style="margin-bottom:8px">✕</button>` : ''}
-      </div>
-    `).join('');
-  };
-
-  const renderSgs = () => {
-    $('#sgs').innerHTML = s.signatories.map((g, i) => `
-      <div class="row g sgrow" data-i="${i}" style="border-bottom:1px solid #f1f5f9;padding-bottom:8px;margin-bottom:8px">
-        <label>Name (EN)<input data-f="name" value="${esc(g.name || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>नाम (HI)<input data-f="nameHi" value="${esc(g.nameHi || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>Designation (EN)<input data-f="designation" value="${esc(g.designation || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>पदनाम (HI)<input data-f="designationHi" value="${esc(g.designationHi || '')}" ${!isAdmin ? 'disabled' : ''}></label>
-        ${isAdmin ? `<label>Upload Sign/Stamp<input data-f="stampfile" type="file" accept="image/png,image/jpeg,image/webp"></label>` : ''}
-        <span class="mut" style="margin-bottom:12px">${g.stamp ? '🔒 Stamp set' : 'No stamp'}</span>
-        ${isAdmin && s.signatories.length > 1 ? `<button class="ghost" data-delsg="${i}" style="margin-bottom:8px">✕</button>` : ''}
-      </div>
-    `).join('');
-  };
-
-  const renderRcs = () => {
-    $('#rcs').innerHTML = s.recipients.map((r, i) => `
-      <div class="row g rcrow" data-i="${i}">
-        <label style="max-width:110px">@Alias<input data-f="alias" value="${esc(r.alias)}" ${!isAdmin ? 'disabled' : ''}></label>
-        <label>English Address<textarea data-f="en" rows="2" ${!isAdmin ? 'disabled' : ''}>${esc(r.en)}</textarea></label>
-        <label>हिंदी पता<textarea data-f="hi" rows="2" ${!isAdmin ? 'disabled' : ''}>${esc(r.hi)}</textarea></label>
-        ${isAdmin ? `<button class="ghost" data-delrc="${i}" style="margin-bottom:8px">✕</button>` : ''}
-      </div>
-    `).join('');
-  };
-
-  renderMh(); renderSgs(); renderRcs();
-
-  const readDataUrl = f => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(f); });
-
-  if (isAdmin) {
-    $('#mhList').addEventListener('input', e => {
-      const row = e.target.closest('.mhrow');
-      if (row && e.target.dataset.f) s.majorHeads[+row.dataset.i][e.target.dataset.f] = e.target.value;
-    });
-    $('#mhList').addEventListener('click', e => {
-      if (e.target.dataset.delmh !== undefined && s.majorHeads.length > 1) {
-        s.majorHeads.splice(+e.target.dataset.delmh, 1);
-        renderMh();
-      }
-    });
-    $('#addMh').onclick = () => { s.majorHeads.push({ code: 'NEW', en: 'New Major Head', hi: 'नया मद' }); renderMh(); };
-
-    $('#sgs').addEventListener('input', e => {
-      const row = e.target.closest('.sgrow');
-      if (row && e.target.dataset.f && e.target.dataset.f !== 'stampfile') s.signatories[+row.dataset.i][e.target.dataset.f] = e.target.value;
-    });
-    $('#sgs').addEventListener('change', async e => {
-      if (e.target.dataset.f === 'stampfile' && e.target.files[0]) {
-        try {
-          const dUrl = await readDataUrl(e.target.files[0]);
-          const up = await apiJson('api/upload-image', { method: 'POST', body: JSON.stringify({ dataUrl: dUrl, kind: 'stamp' }) });
-          s.signatories[+e.target.closest('.sgrow').dataset.i].stamp = up.path;
-          toast('Protected stamp uploaded — click Save All Settings');
-          renderSgs();
-        } catch (err) { toast(err.message, true); }
-      }
-    });
-    $('#sgs').addEventListener('click', e => {
-      if (e.target.dataset.delsg !== undefined && s.signatories.length > 1) {
-        s.signatories.splice(+e.target.dataset.delsg, 1);
-        renderSgs();
-      }
-    });
-    $('#addsg').onclick = () => { s.signatories.push({ id: Core.uid(), name: '', nameHi: '', designation: '', designationHi: '', org: s.school.en, orgHi: s.school.hi, stamp: '' }); renderSgs(); };
-
-    $('#rcs').addEventListener('input', e => {
-      const row = e.target.closest('.rcrow');
-      if (row && e.target.dataset.f) s.recipients[+row.dataset.i][e.target.dataset.f] = e.target.value;
-    });
-    $('#rcs').addEventListener('click', e => {
-      if (e.target.dataset.delrc !== undefined) { s.recipients.splice(+e.target.dataset.delrc, 1); renderRcs(); }
-    });
-    $('#addrc').onclick = () => { s.recipients.push({ alias: '', en: '', hi: '' }); renderRcs(); };
-
-    $('#lhfile').onchange = async e => {
-      if (!e.target.files[0]) return;
-      try {
-        const dUrl = await readDataUrl(e.target.files[0]);
-        const up = await apiJson('api/upload-image', { method: 'POST', body: JSON.stringify({ dataUrl: dUrl, kind: 'letterhead' }) });
-        s.letterhead = up.path;
-        toast('Letterhead uploaded — click Save All Settings');
-      } catch (err) { toast(err.message, true); }
-    };
-    $('#lhreset').onclick = () => { s.letterhead = 'assets/letterhead.png'; toast('Reset to default letterhead — click Save All Settings'); };
-
-    $('#setN').onclick = async () => {
-      const n = +$('#nextN').value;
-      if (!(n >= 1)) return toast('Enter a valid number ≥ 1', true);
-      await Store.op('setCounter', { series: 'out', year: nextRefNow('ADM').yk, last: n - 1 });
-      toast('Next Ref. No. updated to ' + nextRefNow('ADM').ref);
-      viewSet();
-    };
-
-    $('#saveS').onclick = async () => {
-      s.school.name = $('#sc_name').value.trim();
-      s.school.subName = $('#sc_subName').value.trim();
-      s.school.en = $('#sc_en').value.trim();
-      s.school.hi = $('#sc_hi').value.trim();
-      s.school.addressEn = $('#sc_addrEn').value.trim();
-      s.school.addressHi = $('#sc_addrHi').value.trim();
-      s.school.udise = $('#sc_udise').value.trim();
-      s.school.cbseAff = $('#sc_cbse').value.trim();
-      s.school.estd = $('#sc_estd').value.trim();
-      s.school.email = $('#sc_email').value.trim();
-      s.school.phone = $('#sc_phone').value.trim();
-
-      s.refFormat = $('#refFormat').value.trim();
-      s.inFormat = $('#inFormat').value.trim();
-      s.yearMode = $('#yearMode').value;
-      s.padWidth = +$('#padWidth').value;
-      s.fontFamily = $('#fontFamily').value;
-      s.fontPt = +$('#fontPt').value;
-      s.sigAlign = $('#sigAlign').value;
-      s.topMm = +$('#topMm').value;
-      s.preprinted = $('#preprinted').checked;
-      s.defaultShowSign = $('#defaultShowSign').checked;
-      s.showMajorHeadOnLetter = $('#showMajorHeadOnLetter').checked;
-
-      if (!/\{n\}/.test(s.refFormat)) return toast('Ref. format must include {n}', true);
-      try {
-        await Store.op('saveSettings', s);
-        toast('Settings saved ✓');
-        viewSet();
-      } catch (err) { toast(err.message, true); }
-    };
-
-    const rf = $('#rf');
-    if (rf) {
-      rf.onchange = async e => {
-        const f = e.target.files[0];
-        if (!f) return;
-        try {
-          const parsed = JSON.parse(await f.text());
-          if (!confirm('Replace ALL current letters and settings with this backup?')) return;
-          await Store.op('restore', parsed);
-          await Store.reload();
-          toast('Database restored ✓');
-          go('home');
-        } catch (err) { toast(err.message, true); }
-      };
-    }
-
-    $$('[data-deltpl]').forEach(btn => {
-      btn.onclick = async () => {
-        if (!confirm('Delete this custom template?')) return;
-        await Store.op('deleteCustomTemplate', { id: btn.dataset.deltpl });
-        viewSet();
-      };
-    });
-  }
-
-  const newCustBtn = $('#newCustTpl');
-  if (newCustBtn) {
-    newCustBtn.onclick = async () => {
-      const v = await ask('Create Custom Bilingual Template (कस्टम टेम्पलेट)', [
-        { k: 'name', l: 'Template Title (e.g. Scholarship Forwarding / छात्रवृत्ति प्रेषण)' },
-        { k: 'majorHead', l: 'Default Major Head', type: 'select', opts: s.majorHeads.map(h => ({ v: h.code, l: `${h.code} — ${h.en}` })), v: 'ADM' },
-        { k: 'layout', l: 'Layout Style', type: 'select', opts: [{ v: 'letter', l: 'Official Letter' }, { v: 'cert', l: 'Certificate' }, { v: 'notice', l: 'Notice / Office Order' }], v: 'letter' },
-        { k: 'enSubj', l: 'English Subject (use {{placeholder}})', ph: 'Regarding {{topic}} for {{student_name}}' },
-        { k: 'enBody', l: 'English Body (use {{placeholder}})', type: 'area', ph: 'With due respect, {{details}}...' },
-        { k: 'hiSubj', l: 'हिंदी विषय ({{placeholder}} का प्रयोग करें)', ph: '{{student_name}} के {{topic}} के संबंध में।' },
-        { k: 'hiBody', l: 'हिंदी मुख्य भाग ({{placeholder}} का प्रयोग करें)', type: 'area', ph: 'सविनय निवेदन है कि {{details}}...' },
-      ], 'Save Template');
-      if (!v || !v.name) return;
-      const keys = Tpl.extractPlaceholders([v.enSubj, v.enBody, v.hiSubj, v.hiBody]);
-      const sys = new Set(Core.SYSTEM_PLACEHOLDERS.map(p => p.key));
-      const fields = keys.filter(k => !sys.has(k)).map(k => ({ k, l: k.replace(/_/g, ' '), t: 'text' }));
-      await Store.op('saveCustomTemplate', {
-        name: v.name,
-        majorHead: v.majorHead,
-        layout: v.layout,
-        fields,
-        en: { subject: v.enSubj, body: v.enBody, heading: v.layout !== 'letter' ? v.name.toUpperCase() : '' },
-        hi: { subject: v.hiSubj, body: v.hiBody, heading: v.layout !== 'letter' ? v.name : '' },
-      });
-      toast('Custom template created ✓');
-      viewSet();
-    };
-  }
-
-  $('#bkBtn').onclick = async () => {
-    const blob = new Blob([JSON.stringify(Store.db, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `LetterDraftAssistant_Backup_${Core.todayISO()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    if (Session.can('write')) await Store.op('markBackup').catch(() => {});
-    toast('JSON Backup downloaded ✓');
-  };
-}
-
-/* ---------- Quick Command Bar ---------- */
-const HELP = [
-  ['n <tpl>[.hi] [@alias] [k="v"]', 'New letter — e.g. n bon.hi name="Anita" father="Ramesh" cls=XII purpose="Scholarship"'],
-  ['head <code>', 'Filter register by Major Head — e.g. head STD  |  head FIN  |  head ADM'],
-  ['f <keyword>', 'Search Letter No., Major Head, Recipient, or Subject'],
-  ['ref <no>  |  dup <no>', 'Open or duplicate letter by Ref. No. (e.g. ref 321)'],
-  ['d <no> [mode]', 'Mark letter dispatched today (e.g. d 321 Speed Post)'],
-  ['docx · pdf · xlsx', 'Download current letter as Word/PDF, or Master Register as Excel (.xlsx)'],
-  ['Shortcuts', 'Ctrl+K Command bar · Ctrl+S Save draft · Ctrl+Enter Issue & Print'],
-];
-
-function tok(s) {
-  const o = [];
-  const re = /(?:(\w+)=)?(?:"([^"]*)"|'([^']*)'|(\S+))/g;
-  let m;
-  while ((m = re.exec(s))) o.push({ k: m[1], v: m[2] ?? m[3] ?? m[4] });
-  return o;
-}
-
-const findByRef = (a) => {
-  const yk = nextRefNow('ADM').yk;
-  const x = String(a || '').trim();
-  return Store.db.letters.find(l => l.ref === x)
-    || Store.db.letters.find(l => l.ref && l.refNo === +x && l.refYear === yk)
-    || Store.db.letters.filter(l => l.ref && l.refNo === +x).sort((p, q) => q.refYear - p.refYear)[0];
-};
-
-async function runCmd(line) {
-  line = line.trim();
-  if (!line || !Store.db) return;
-  const t = tok(line);
-  const c = (t[0].v || '').toLowerCase();
-  const rest = t.slice(1);
-  try {
-    if (c === 'help' || c === '?') return showHelp();
-    if (c === 'xlsx' || c === 'excel') return downloadFromApi('api/export/xlsx', null, `Master_Letter_Register_${Core.todayISO()}.xlsx`);
-    if (c === 'docx' && S.view === 'editor' && S.cur) return downloadFromApi('api/export/docx', { letter: resolveLiveLetter(S.cur) }, 'Letter.docx');
-    if (c === 'pdf' && S.view === 'editor' && S.cur) return downloadFromApi('api/export/pdf', { letter: resolveLiveLetter(S.cur) }, 'Letter.pdf');
-    if (c === 'head' && rest[0]) { S.head = rest[0].v.toUpperCase(); S.q = ''; return go('out'); }
-    if (['home', 'out', 'inw', 'sync', 'sec', 'set'].includes(c)) return go(c);
-
-    if (c === 'n' || c === 'new') {
-      const tp = (rest[0] && !rest[0].k ? rest[0].v : 'req').toLowerCase();
-      const [id, lg] = tp.split('.');
-      const tpl = allTemplates().find(x => x.id === id) || allTemplates().find(x => x.id.startsWith(id));
-      if (!tpl) throw new Error('Unknown template: ' + id);
-      const o = { tpl: tpl.id + (lg ? '.' + lg : ''), fields: {} };
-      rest.slice(1).concat(rest[0] && rest[0].k ? [rest[0]] : []).forEach(a => {
-        if (!a.k && a.v[0] === '@') {
-          const al = a.v.slice(1).toLowerCase();
-          const r = Store.db.settings.recipients.find(x => x.alias === al || x.alias.startsWith(al));
-          if (!r) throw new Error('Unknown @alias: ' + al);
-          o.rcpt = r.alias;
-        } else if (a.k === 'head') o.majorHead = a.v.toUpperCase();
-        else if (a.k === 'sub') o.subHead = a.v;
-        else if (a.k === 'subject') o.subject = a.v;
-        else if (a.k === 'to') o.to = a.v.replace(/\\n|;/g, '\n');
-        else if (a.k) o.fields[a.k] = a.v.replace(/\\n/g, '\n');
-      });
-      return go('editor', newLetter(o));
-    }
-
-    if (c === 'ref' || c === 'open') {
-      const l = findByRef(rest[0] && rest[0].v);
-      if (!l) throw new Error('Letter not found');
-      return go('editor', clone(l));
-    }
-    if (c === 'dup') {
-      const l = findByRef(rest[0] && rest[0].v);
-      if (!l) throw new Error('Letter not found');
-      const d = clone(l);
-      ['ref', 'refNo', 'refYear', 'issuedAt', 'dispatch', 'reply', 'cancelReason', 'editedAfterIssue', 'createdAt'].forEach(k => delete d[k]);
-      d.id = Core.uid(); d.status = 'draft'; d.date = Core.todayISO();
-      return go('editor', d);
-    }
-    if (c === 'd' && rest[0]) {
-      const l = findByRef(rest[0].v);
-      if (!l) throw new Error('Letter not found');
-      const mode = rest.slice(1).map(x => x.v).join(' ') || 'By Hand';
-      await Store.op('patchLetter', { id: l.id, patch: { dispatch: { mode, date: Core.todayISO(), note: '' } } });
-      toast(`${l.ref} marked dispatched (${mode})`);
-      return go(S.view, S.cur);
-    }
-
-    S.q = (c === 'f' || c === 'find') ? line.replace(/^(f|find)\s+/i, '') : line;
-    S.head = '';
-    go('out');
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
-function showHelp() {
-  const d = $('#dlg');
-  d.innerHTML = `<form method="dialog">
-    <h3>⌨ Quick Commands &amp; Shortcuts</h3>
-    <table class="tb">${HELP.map(h => `<tr><td><code>${esc(h[0])}</code></td><td>${esc(h[1])}</td></tr>`).join('')}</table>
-    <div class="row end"><button class="pri">Close</button></div>
-  </form>`;
-  d.onclose = null;
-  d.showModal();
-}
-
-function bindGlobalEvents() {
-  $$('#sideNav button').forEach(b => {
-    b.onclick = () => go(b.dataset.v);
-  });
-
-  $('#btnLogout').onclick = async () => {
-    await apiJson('api/auth/logout', { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
-    Session.clear();
-    toast('Signed out safely');
-    showAuthGate();
-  };
-
-  const cmd = $('#cmd');
-  const sug = $('#sug');
-  cmd.addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
-      const v = cmd.value;
-      cmd.value = '';
-      sug.innerHTML = '';
-      cmd.blur();
-      runCmd(v);
-    } else if (e.key === 'Escape') {
-      cmd.value = '';
-      sug.innerHTML = '';
-      cmd.blur();
-    }
-  });
-  cmd.addEventListener('input', () => {
-    const m = /^(n|new)\s+(\S*)$/i.exec(cmd.value.trim());
-    if (!m || !Store.db) { sug.innerHTML = ''; return; }
-    const q = m[2].split('.')[0].toLowerCase();
-    sug.innerHTML = allTemplates()
-      .filter(t => t.id.startsWith(q))
-      .slice(0, 8)
-      .map(t => `<div data-pick="${esc(t.id)}"><b>${esc(t.id)}</b> · [${esc(t.majorHead || 'ADM')}] <span>${esc(t.name)}</span></div>`)
-      .join('');
-    $$('div[data-pick]', sug).forEach(el => {
-      el.onmousedown = () => {
-        cmd.value = `n ${el.dataset.pick} `;
-        sug.innerHTML = '';
-        cmd.focus();
-      };
-    });
-  });
-  cmd.addEventListener('blur', () => setTimeout(() => { sug.innerHTML = ''; }, 160));
-
-  document.addEventListener('keydown', e => {
-    if (!Session.user) return;
-    const k = e.key.toLowerCase();
-    if ((e.ctrlKey || e.metaKey) && k === 'k') {
-      e.preventDefault(); cmd.focus(); cmd.select();
-    } else if ((e.ctrlKey || e.metaKey) && k === 's' && S.view === 'editor') {
-      e.preventDefault(); saveCur(false);
-    } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && S.view === 'editor' && S.cur) {
-      e.preventDefault();
-      if (S.cur.status === 'draft' && Session.can('write')) issueCur(true);
-      else printHTML(letterHTML(S.cur, true));
-    }
-  });
-
-  window.addEventListener('beforeunload', e => {
-    if (S.cur && S.cur.dirty) { e.preventDefault(); e.returnValue = ''; }
-  });
-}
-
-/* ---------- Boot ---------- */
-(function init() {
-  bindGlobalEvents();
-  showAuthGate();
+  checkAuthAndBoot();
 })();

@@ -5,9 +5,11 @@
      {{key?prefix %}}     -> Optional placeholder (% is replaced by value if provided, else omitted)
 */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.Tpl = factory();
-})(typeof self !== 'undefined' ? self : this, function () {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  root.Tpl = api;
+  root.TEMPLATES = api.list;
+})(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
   const F = (k, l, o) => Object.assign({ k, l, t: 'text' }, o || {});
