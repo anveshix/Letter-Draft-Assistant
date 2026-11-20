@@ -1,5 +1,6 @@
-/* Letter Draft Assistant — Shared Core Domain Logic (Browser + Node.js Server)
-   Handles Ref. No. allocation, Major Heads, Global Placeholders, Validation & State Ops. */
+/* Letter Draft Assistant v3.0 — Shared Core Domain Logic (Browser + Node.js Server)
+   Includes: Ref. No. engine, Major Heads, Placeholders, Student/Staff Master Directory,
+   Clerk->Principal Approval Queue, QR Settings, and Inward SLA Deadlines. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.Core = factory();
@@ -10,6 +11,17 @@
   const todayISO = () => {
     const d = new Date();
     return d.getFullYear() + '-' + pad(d.getMonth() + 1, 2) + '-' + pad(d.getDate(), 2);
+  };
+  const addDaysISO = (iso, days) => {
+    const base = /^\d{4}-\d{2}-\d{2}$/.test(String(iso || '')) ? new Date(iso + 'T00:00:00Z') : new Date();
+    base.setUTCDate(base.getUTCDate() + (Number(days) || 0));
+    return base.toISOString().slice(0, 10);
+  };
+  const diffDaysISO = (targetIso, refIso) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(targetIso || ''))) return null;
+    const t = new Date(targetIso + 'T00:00:00Z').getTime();
+    const r = new Date((refIso || todayISO()) + 'T00:00:00Z').getTime();
+    return Math.round((t - r) / 86400000);
   };
   const fmtDateDMY = (iso) => {
     if (!iso || typeof iso !== 'string') return '';
@@ -55,6 +67,13 @@
     { code: 'NOT', en: 'Notices, Circulars & Office Orders', hi: 'सूचना, परिपत्र एवं कार्यालय आदेश' },
   ];
 
+  const INWARD_PRIORITIES = [
+    { id: 'normal', label: 'Normal (7 Days / सामान्य)', days: 7 },
+    { id: 'urgent', label: 'Urgent 48h (अति आवश्यक / तत्काल)', days: 2 },
+    { id: 'rti', label: 'RTI Statutory (30 Days / सूचना का अधिकार)', days: 30 },
+    { id: 'board_court', label: 'Board / Court / Audit (5 Days)', days: 5 },
+  ];
+
   const SYSTEM_PLACEHOLDERS = [
     { key: 'ref_no', label: 'Ref. No. / पत्रांक' },
     { key: 'date', label: 'Letter Date / दिनांक' },
@@ -84,6 +103,13 @@
     return fallback || '';
   }
 
+  function sanitizeAttachmentSrc(src) {
+    const s = String(src || '').trim();
+    if (!s) return '';
+    if (/^api\/files\/[a-zA-Z0-9._-]+$/.test(s)) return s;
+    return '';
+  }
+
   const defaultSettings = () => ({
     school: {
       name: "CM SCHOOL OF EXCELLENCE GIRLS' DUMKA",
@@ -103,16 +129,19 @@
       phone: '',
     },
     letterhead: 'assets/letterhead.png',
-    yearMode: 'calendar',        // 'calendar' (Jan–Dec) or 'session' (Apr–Mar)
-    refFormat: '{n}/{yy}',       // tokens: {n} {yy} {yyyy} {sess} {head}
+    yearMode: 'calendar',
+    refFormat: '{n}/{yy}',
     inFormat: 'IN-{n}/{yy}',
     padWidth: 0,
     preprinted: false,
     topMm: 48,
     fontPt: 12,
-    fontFamily: 'karma',         // 'karma' (Official Serif) | 'mukta' (Clean Modern Sans)
+    fontFamily: 'karma',
     sigAlign: 'right',
     defaultShowSign: false,
+    defaultShowQr: true,
+    publicBaseUrl: '',
+    requireApprovalForStaff: false,
     showMajorHeadOnLetter: false,
     majorHeads: DEFAULT_MAJOR_HEADS.map(h => Object.assign({}, h)),
     signatories: [
@@ -142,7 +171,7 @@
     gsheet: {
       enabled: false,
       autoSync: true,
-      mode: 'webhook', // 'webhook' | 'service_account'
+      mode: 'webhook',
       webhookUrl: '',
       webhookSecret: '',
       spreadsheetId: '',
@@ -153,11 +182,13 @@
   });
 
   const defaultDb = () => ({
-    v: 2,
+    v: 3,
     settings: defaultSettings(),
     counters: { 'out|2026': 320 },
     letters: [],
     inward: [],
+    students: [],
+    staff: [],
     customTemplates: [],
   });
 
@@ -176,6 +207,9 @@
     s.fontFamily = ['karma', 'mukta'].includes(s.fontFamily) ? s.fontFamily : 'karma';
     s.sigAlign = s.sigAlign === 'left' ? 'left' : 'right';
     s.defaultShowSign = !!s.defaultShowSign;
+    s.defaultShowQr = s.defaultShowQr !== false;
+    s.publicBaseUrl = String(s.publicBaseUrl || '').trim().replace(/\/+$/, '').slice(0, 200);
+    s.requireApprovalForStaff = !!s.requireApprovalForStaff;
     s.showMajorHeadOnLetter = !!s.showMajorHeadOnLetter;
 
     if (!Array.isArray(s.majorHeads) || !s.majorHeads.length) {
@@ -231,23 +265,72 @@
     return s;
   }
 
+  function sanitizeStudent(raw) {
+    return {
+      id: String(raw.id || ('stu_' + uid())).slice(0, 40),
+      admNo: String(raw.admNo || '').trim().slice(0, 40),
+      rollNo: String(raw.rollNo || '').trim().slice(0, 20),
+      name: String(raw.name || '').trim().slice(0, 120),
+      nameHi: String(raw.nameHi || '').trim().slice(0, 120),
+      father: String(raw.father || '').trim().slice(0, 120),
+      fatherHi: String(raw.fatherHi || '').trim().slice(0, 120),
+      mother: String(raw.mother || '').trim().slice(0, 120),
+      motherHi: String(raw.motherHi || '').trim().slice(0, 120),
+      cls: String(raw.cls || '').trim().slice(0, 40),
+      dob: String(raw.dob || '').trim().slice(0, 20),
+      session: String(raw.session || '').trim().slice(0, 20),
+      category: String(raw.category || '').trim().slice(0, 30),
+      phone: String(raw.phone || '').trim().slice(0, 25),
+      updatedAt: Date.now(),
+    };
+  }
+
+  function sanitizeStaff(raw) {
+    return {
+      id: String(raw.id || ('stf_' + uid())).slice(0, 40),
+      empId: String(raw.empId || '').trim().slice(0, 40),
+      name: String(raw.name || '').trim().slice(0, 120),
+      nameHi: String(raw.nameHi || '').trim().slice(0, 120),
+      fatherOrSpouse: String(raw.fatherOrSpouse || '').trim().slice(0, 120),
+      designation: String(raw.designation || '').trim().slice(0, 100),
+      designationHi: String(raw.designationHi || '').trim().slice(0, 100),
+      subject: String(raw.subject || '').trim().slice(0, 80),
+      joinDate: String(raw.joinDate || '').trim().slice(0, 20),
+      phone: String(raw.phone || '').trim().slice(0, 25),
+      email: String(raw.email || '').trim().slice(0, 100),
+      updatedAt: Date.now(),
+    };
+  }
+
   const migrate = (db) => {
     if (!db || typeof db !== 'object') return defaultDb();
-    db.v = 2;
+    db.v = 3;
     db.settings = sanitizeSettings(db.settings);
     db.counters = db.counters && typeof db.counters === 'object' ? db.counters : {};
     db.letters = Array.isArray(db.letters) ? db.letters : [];
     db.inward = Array.isArray(db.inward) ? db.inward : [];
+    db.students = Array.isArray(db.students) ? db.students : [];
+    db.staff = Array.isArray(db.staff) ? db.staff : [];
     db.customTemplates = Array.isArray(db.customTemplates) ? db.customTemplates : [];
+
     db.letters.forEach(l => {
       if (!l.majorHead) l.majorHead = inferMajorHead(l.tpl);
       if (l.subHead === undefined) l.subHead = '';
       if (l.remarks === undefined) l.remarks = '';
+      if (l.showQr === undefined) l.showQr = l.layout === 'cert' ? true : !!db.settings.defaultShowQr;
+      if (l.customStamp) l.customStamp = sanitizeImageSrc(l.customStamp, '');
     });
+
     db.inward.forEach(r => {
       if (!r.majorHead) r.majorHead = 'ADM';
       if (r.subHead === undefined) r.subHead = '';
       if (r.remarks === undefined) r.remarks = '';
+      if (!r.priority) r.priority = 'normal';
+      if (r.needsReply && !r.dueDate) {
+        const pObj = INWARD_PRIORITIES.find(x => x.id === r.priority) || INWARD_PRIORITIES[0];
+        r.dueDate = addDaysISO(r.date || todayISO(), pObj.days);
+      }
+      if (r.attachment) r.attachment = sanitizeAttachmentSrc(r.attachment);
     });
     return db;
   };
@@ -276,6 +359,24 @@
     if (lang === 'hi') return `${h.code} — ${h.hi}`;
     if (lang === 'en') return `${h.code} — ${h.en}`;
     return `${h.code} — ${h.en} (${h.hi})`;
+  }
+
+  function inwardDeadlineMeta(r, refToday) {
+    if (!r || r.status !== 'pending' || !r.dueDate) {
+      return { overdue: false, dueSoon: false, daysLeft: null, label: '' };
+    }
+    const daysLeft = diffDaysISO(r.dueDate, refToday || todayISO());
+    if (daysLeft === null) return { overdue: false, dueSoon: false, daysLeft: null, label: '' };
+    if (daysLeft < 0) {
+      return { overdue: true, dueSoon: false, daysLeft, label: `Overdue by ${Math.abs(daysLeft)}d` };
+    }
+    if (daysLeft === 0) {
+      return { overdue: false, dueSoon: true, daysLeft: 0, label: 'Due Today!' };
+    }
+    if (daysLeft <= 3) {
+      return { overdue: false, dueSoon: true, daysLeft, label: `Due in ${daysLeft}d` };
+    }
+    return { overdue: false, dueSoon: false, daysLeft, label: `${daysLeft}d left` };
   }
 
   function buildPlaceholderContext(db, letter, nextRefPreview) {
@@ -361,6 +462,8 @@
       l.majorHead = String(l.majorHead || inferMajorHead(l.tpl)).toUpperCase().slice(0, 12);
       l.subHead = String(l.subHead || '').trim().slice(0, 120);
       l.remarks = String(l.remarks || '').trim().slice(0, 500);
+      l.showQr = l.showQr !== false;
+      if (l.customStamp) l.customStamp = sanitizeImageSrc(l.customStamp, '');
       l.updatedAt = Date.now();
       if (actor) l.updatedBy = actor;
 
@@ -383,16 +486,55 @@
         createdBy: o.createdBy,
         issuedAt: o.issuedAt,
         issuedBy: o.issuedBy,
+        approvedBy: o.approvedBy,
+        approvedAt: o.approvedAt,
+        approvalNote: o.approvalNote,
+        submittedBy: o.submittedBy,
+        submittedAt: o.submittedAt,
+        submissionNote: o.submissionNote,
         dispatch: o.dispatch,
         reply: o.reply,
         cancelReason: o.cancelReason,
       });
-      if (o.status !== 'draft') {
+      if (o.status === 'issued' || o.status === 'dispatched') {
         l.editedAfterIssue = o.editedAfterIssue || o.body !== l.body || o.subject !== l.subject || o.to !== l.to;
       }
       Object.keys(l).forEach(k => { if (l[k] === undefined) delete l[k]; });
       db.letters[i] = l;
       return l;
+    },
+
+    submitForApproval(db, { id, note }, actor) {
+      const l = findL(db, id);
+      need(!l.ref && ['draft', 'returned', 'pending_approval'].includes(l.status), 'Only unissued drafts can be sent for approval.');
+      l.status = 'pending_approval';
+      l.submittedBy = actor || l.updatedBy || 'staff';
+      l.submittedAt = Date.now();
+      l.submissionNote = String(note || '').trim().slice(0, 300);
+      l.updatedAt = Date.now();
+      return l;
+    },
+
+    returnLetter(db, { id, note }, actor) {
+      const l = findL(db, id);
+      need(!l.ref, 'Issued letter cannot be returned as draft.');
+      l.status = 'returned';
+      l.approvalNote = String(note || '').trim().slice(0, 400);
+      l.reviewedBy = actor || 'admin';
+      l.reviewedAt = Date.now();
+      l.updatedAt = Date.now();
+      return l;
+    },
+
+    approveAndIssueLetter(db, { id, date, note, customStamp, showSign }, actor) {
+      const l = findL(db, id);
+      need(l.status !== 'cancelled', 'Cancelled letter cannot be approved.');
+      if (customStamp) l.customStamp = sanitizeImageSrc(customStamp, '');
+      if (typeof showSign === 'boolean') l.showSign = showSign;
+      l.approvedBy = actor || 'admin';
+      l.approvedAt = Date.now();
+      if (note !== undefined) l.approvalNote = String(note || '').trim().slice(0, 400);
+      return ops.issueLetter(db, { id, date }, actor);
     },
 
     issueLetter(db, { id, date }, actor) {
@@ -434,7 +576,7 @@
 
     deleteLetter(db, { id }) {
       const l = findL(db, id);
-      need(l.status === 'draft', 'Only unissued drafts can be deleted. Issued letters must be Cancelled so Ref. Nos. have no gaps.');
+      need(!l.ref, 'Issued letters cannot be deleted; use Cancel so Ref. Nos. have no gaps.');
       db.letters = db.letters.filter(x => x.id !== id);
       return { id };
     },
@@ -442,7 +584,7 @@
     patchLetter(db, { id, patch }, actor) {
       const l = findL(db, id);
       need(patch && typeof patch === 'object', 'Invalid patch');
-      ['dispatch', 'reply', 'remarks', 'awaitingReply', 'majorHead', 'subHead'].forEach(k => {
+      ['dispatch', 'reply', 'remarks', 'awaitingReply', 'majorHead', 'subHead', 'showQr'].forEach(k => {
         if (k in patch) l[k] = patch[k];
       });
       if (patch.dispatch && l.status === 'issued') l.status = 'dispatched';
@@ -460,7 +602,15 @@
       r.subject = String(r.subject || '').trim().slice(0, 400);
       r.senderRef = String(r.senderRef || '').trim().slice(0, 120);
       r.remarks = String(r.remarks || '').trim().slice(0, 400);
+      r.priority = INWARD_PRIORITIES.some(p => p.id === r.priority) ? r.priority : 'normal';
+      r.attachment = sanitizeAttachmentSrc(r.attachment);
+      r.ocrText = String(r.ocrText || '').slice(0, 4000);
       need(r.from && r.subject, 'Sender and Subject are required.');
+
+      if (r.needsReply && !r.dueDate) {
+        const pObj = INWARD_PRIORITIES.find(x => x.id === r.priority) || INWARD_PRIORITIES[0];
+        r.dueDate = addDaysISO(r.date || todayISO(), pObj.days);
+      }
 
       const i = db.inward.findIndex(x => x.id === r.id);
       if (i < 0) {
@@ -485,6 +635,85 @@
     deleteInward(db, { id }) {
       db.inward = db.inward.filter(x => x.id !== id);
       return { id };
+    },
+
+    // Student & Staff Master Directory Ops
+    saveStudent(db, stu) {
+      need(stu && stu.name, 'Student name is required.');
+      const clean = sanitizeStudent(stu);
+      const idx = db.students.findIndex(x => x.id === clean.id || (clean.admNo && x.admNo && x.admNo.toLowerCase() === clean.admNo.toLowerCase()));
+      if (idx >= 0) {
+        clean.id = db.students[idx].id;
+        db.students[idx] = clean;
+      } else {
+        db.students.push(clean);
+      }
+      return clean;
+    },
+
+    deleteStudent(db, { id }) {
+      db.students = db.students.filter(x => x.id !== id);
+      return { id };
+    },
+
+    bulkUpsertStudents(db, { rows }) {
+      need(Array.isArray(rows), 'Invalid student list');
+      let added = 0, updated = 0;
+      rows.forEach(raw => {
+        if (!raw || !String(raw.name || '').trim()) return;
+        const clean = sanitizeStudent(raw);
+        const idx = clean.admNo
+          ? db.students.findIndex(x => x.admNo && x.admNo.toLowerCase() === clean.admNo.toLowerCase())
+          : -1;
+        if (idx >= 0) {
+          clean.id = db.students[idx].id;
+          db.students[idx] = clean;
+          updated++;
+        } else {
+          db.students.push(clean);
+          added++;
+        }
+      });
+      return { added, updated, total: db.students.length };
+    },
+
+    saveStaff(db, stf) {
+      need(stf && stf.name, 'Staff name is required.');
+      const clean = sanitizeStaff(stf);
+      const idx = db.staff.findIndex(x => x.id === clean.id || (clean.empId && x.empId && x.empId.toLowerCase() === clean.empId.toLowerCase()));
+      if (idx >= 0) {
+        clean.id = db.staff[idx].id;
+        db.staff[idx] = clean;
+      } else {
+        db.staff.push(clean);
+      }
+      return clean;
+    },
+
+    deleteStaff(db, { id }) {
+      db.staff = db.staff.filter(x => x.id !== id);
+      return { id };
+    },
+
+    bulkUpsertStaff(db, { rows }) {
+      need(Array.isArray(rows), 'Invalid staff list');
+      let added = 0, updated = 0;
+      rows.forEach(raw => {
+        if (!raw || !String(raw.name || '').trim()) return;
+        const clean = sanitizeStaff(raw);
+        const idx = clean.empId
+          ? db.staff.findIndex(x => x.empId && x.empId.toLowerCase() === clean.empId.toLowerCase())
+          : -1;
+        if (idx >= 0) {
+          clean.id = db.staff[idx].id;
+          db.staff[idx] = clean;
+          updated++;
+        } else {
+          db.staff.push(clean);
+          added++;
+        }
+      });
+      return { added, updated, total: db.staff.length };
     },
 
     saveSettings(db, s) {
@@ -549,6 +778,8 @@
       db.counters = d.counters || {};
       db.letters = d.letters;
       db.inward = d.inward || [];
+      db.students = d.students || [];
+      db.staff = d.staff || [];
       db.customTemplates = d.customTemplates || [];
       migrate(db);
       return { ok: true };
@@ -560,7 +791,19 @@
     },
   };
 
-  const ADMIN_ONLY_OPS = new Set(['cancelLetter', 'deleteLetter', 'deleteInward', 'saveSettings', 'setCounter', 'restore', 'deleteCustomTemplate']);
+  const ADMIN_ONLY_OPS = new Set([
+    'returnLetter',
+    'approveAndIssueLetter',
+    'cancelLetter',
+    'deleteLetter',
+    'deleteInward',
+    'deleteStudent',
+    'deleteStaff',
+    'saveSettings',
+    'setCounter',
+    'restore',
+    'deleteCustomTemplate',
+  ]);
 
   const apply = (db, name, payload, actor) => {
     const f = ops[name];
@@ -570,6 +813,7 @@
 
   return {
     DEFAULT_MAJOR_HEADS,
+    INWARD_PRIORITIES,
     SYSTEM_PLACEHOLDERS,
     ADMIN_ONLY_OPS,
     defaultSettings,
@@ -577,13 +821,17 @@
     migrate,
     sanitizeSettings,
     sanitizeImageSrc,
+    sanitizeAttachmentSrc,
     inferMajorHead,
     getMajorHeadObj,
     getMajorHeadLabel,
+    inwardDeadlineMeta,
     buildPlaceholderContext,
     peekRef,
     alloc,
     todayISO,
+    addDaysISO,
+    diffDaysISO,
     fmtDateDMY,
     sessionFromISO,
     uid,

@@ -1,7 +1,7 @@
 {
   "name": "letter-draft-assistant",
-  "version": "2.0.0",
-  "description": "Secure Official Letter Draft Assistant & Outward/Inward Register System (Hindi + English) with DOCX, PDF, Excel (.xlsx) & Google Sheets Sync",
+  "version": "3.0.0",
+  "description": "Secure School Correspondence, Certificate, Bulk Mail-Merge, QR Verification & Offline OCR Operating System (Hindi + English)",
   "main": "server.js",
   "engines": {
     "node": ">=18.0.0"
@@ -26,9 +26,17 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/hin": "^1.0.0",
     "docx": "^9.5.1",
     "exceljs": "^4.4.0",
-    "pdfkit": "^0.17.2"
+    "fuse.js": "^7.5.0",
+    "jszip": "^3.10.2",
+    "pdf-lib": "^1.17.1",
+    "pdfkit": "^0.17.2",
+    "qrcode": "^1.5.4",
+    "signature_pad": "^5.1.5",
+    "tesseract.js": "^7.0.0"
   },
   "overrides": {
     "uuid": "^11.1.1"

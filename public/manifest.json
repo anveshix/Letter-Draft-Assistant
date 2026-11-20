@@ -1,0 +1,17 @@
+{
+  "name": "Letter Draft Assistant — Official School OS",
+  "short_name": "LetterDraft",
+  "description": "Secure Bilingual Official Letter, Certificate, Mail-Merge, OCR & Register Operating System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#162d4c",
+  "icons": [
+    {
+      "src": "/assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
