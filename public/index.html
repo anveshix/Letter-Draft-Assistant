@@ -1,15 +1,76 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Letter Desk — CM School of Excellence Girls' Dumka</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ctext y=%2713%27 font-size=%2713%27%3E✉%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="style.css"></head>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Letter Draft Assistant — सुरक्षित पत्र-प्रारूप एवं पंजी प्रणाली</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E%3Crect width=%2724%27 height=%2724%27 rx=%275%27 fill=%27%231f3a5f%27/%3E%3Ctext x=%274%27 y=%2717%27 font-size=%2714%27 fill=%27%23fff%27%3E✉%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
 <body>
-<div id="app">
-  <header><div class="brand">✉ Letter Desk <small>पत्र-व्यवस्था · CM School of Excellence Girls' Dumka</small></div>
-    <div class="cmdwrap"><input id="cmd" placeholder='Command… n bon.hi name="Anita" cls=XII   (Ctrl+K · help)' autocomplete="off" spellcheck="false"><div id="sug"></div></div>
-    <span id="mode" class="mode"></span></header>
-  <nav><button data-v="home">🏠 Home</button><button data-v="editor">✍ Current letter</button><button data-v="out">📤 Outward register</button><button data-v="inw">📥 Inward register</button><button data-v="set">⚙ Settings</button></nav>
-  <main id="main"><p class="mut" style="padding:20px">Loading…</p></main>
-</div>
-<div id="printRoot"></div><dialog id="dlg"></dialog><div id="toast"></div>
-<script src="core.js"></script><script src="templates.js"></script><script src="app.js"></script>
-</body></html>
+  <!-- Mandatory Authentication / Setup Gate -->
+  <div id="authScreen" class="auth-screen">
+    <div class="auth-card" id="authCard">
+      <div class="auth-brand">
+        <div class="auth-logo">✉</div>
+        <div>
+          <h1>Letter Draft Assistant</h1>
+          <p>सुरक्षित कार्यालयी पत्र-प्रारूप एवं जावक/आवक पंजी प्रणाली</p>
+        </div>
+      </div>
+      <div id="authBody"><p class="mut" style="text-align:center;padding:18px 0">Verifying security status…</p></div>
+      <div class="auth-foot">
+        <span>🔒 Scrypt Encrypted</span>
+        <span>•</span>
+        <span>🛡 Role-Based Access</span>
+        <span>•</span>
+        <span>📄 DOCX · PDF · XLSX</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Protected Application Shell -->
+  <div id="app" style="display:none">
+    <header>
+      <div class="brand">
+        <span class="brand-icon">✉</span>
+        <div>
+          <div class="brand-title">Letter Draft Assistant</div>
+          <small id="brandSub">पत्र-व्यवस्था एवं मदवार पंजी</small>
+        </div>
+      </div>
+
+      <div class="cmdwrap">
+        <input id="cmd" placeholder='Quick Command (Ctrl+K):  n bon.hi name="Anita" cls=XII  |  head STD  |  help' autocomplete="off" spellcheck="false">
+        <div id="sug"></div>
+      </div>
+
+      <div class="hdr-right">
+        <span id="userBadge" class="user-badge"></span>
+        <button id="btnLogout" class="hdr-btn" title="Sign Out (लॉगआउट)">⏻ Logout</button>
+      </div>
+    </header>
+
+    <nav id="sideNav">
+      <button data-v="home">🏠 Dashboard <small>मुख्य पटल</small></button>
+      <button data-v="editor">✍ Draft Letter <small>पत्र प्रारूपण</small></button>
+      <button data-v="out">📊 Sheet &amp; Search <small>जावक पंजी व मद खोज</small></button>
+      <button data-v="inw">📥 Inward Register <small>आवक पंजी</small></button>
+      <button data-v="sync">☁ Google &amp; Excel <small>शीट सिंक व डाउनलोड</small></button>
+      <button data-v="sec">🔐 Users &amp; Security <small>सुरक्षा एवं लॉगिन</small></button>
+      <button data-v="set">⚙ Settings &amp; Deploy <small>सेटिंग व होस्टिंग</small></button>
+    </nav>
+
+    <main id="main"></main>
+  </div>
+
+  <div id="printRoot"></div>
+  <dialog id="dlg"></dialog>
+  <div id="toast"></div>
+
+  <script src="core.js"></script>
+  <script src="templates.js"></script>
+  <script src="krutidev-client.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

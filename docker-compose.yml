@@ -1,0 +1,17 @@
+services:
+  letter-draft-assistant:
+    build: .
+    container_name: letter-draft-assistant
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - SESSION_TTL_HOURS=12
+      # Optional: uncomment on first run to pre-seed Admin user
+      # - ADMIN_USERNAME=admin
+      # - ADMIN_PASSWORD=ChangeMeStrong#2026
+    volumes:
+      - ./data:/app/data
+      - ./storage/uploads:/app/storage/uploads
