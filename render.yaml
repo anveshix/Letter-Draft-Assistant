@@ -3,10 +3,12 @@ services:
     name: letter-draft-assistant
     runtime: node
     plan: free
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: npm ci && npm run build
+    startCommand: node server.js
     healthCheckPath: /api/health
     envVars:
+      - key: NODE_VERSION
+        value: "22"
       - key: NODE_ENV
         value: production
       - key: HOST

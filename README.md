@@ -43,9 +43,15 @@ Powered by battle-tested, high-star open-source GitHub libraries (`0` npm vulner
 ./start.sh
 ```
 
-### Docker / Render / Railway
-- **Docker**: `docker compose up -d --build`
-- **Render / Railway**: Blueprint configs (`render.yaml`, `railway.json`, `Dockerfile`) included out of the box.
+### Ready-Made Cloud & Static Deployment Configs (Zero Extra Setup)
+| Platform | Included Files | Notes |
+|---|---|---|
+| **Render** | `render.yaml`, `.nvmrc` | Build: `npm ci && npm run build` · Start: `node server.js` · Node 22 |
+| **Railway / Nixpacks** | `railway.json`, `nixpacks.toml` | Auto-builds & runs `node server.js` with `/api/health` check |
+| **Vercel** | `vercel.json`, `api/index.js` | Full Node serverless API + automatic `/tmp` writable data fallback |
+| **GitHub Pages** | `index.html`, `.nojekyll`, `public/static-vault.js` | Works standalone on `*.github.io` using WebCrypto `PBKDF2-SHA256` Browser Vault |
+| **Netlify** | `netlify.toml` | Publishes `public/` with Browser Vault mode |
+| **Docker / Koyeb / Fly.io / Heroku** | `Dockerfile`, `docker-compose.yml`, `fly.toml`, `Procfile` | Dynamic `$PORT`-aware container healthcheck |
 
 ---
 
@@ -53,6 +59,7 @@ Powered by battle-tested, high-star open-source GitHub libraries (`0` npm vulner
 
 ```bash
 npm ci
+npm run build
 npm test
 npm run security-audit
 ```

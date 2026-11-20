@@ -15,4 +15,6 @@ storage/uploads/
 npm-debug.log*
 .DS_Store
 Thumbs.db
+.vercel/
+.netlify/
 Unselected files/

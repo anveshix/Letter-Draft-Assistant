@@ -15,7 +15,7 @@
     if (!rVal || !cVal) return;
     out.innerHTML = '<p class="mut">Verifying cryptographic signature…</p>';
     try {
-      const res = await fetch(`/api/public/verify?ref=${encodeURIComponent(rVal)}&c=${encodeURIComponent(cVal)}`, { cache: 'no-store' });
+      const res = await fetch(`api/public/verify?ref=${encodeURIComponent(rVal)}&c=${encodeURIComponent(cVal)}`, { cache: 'no-store' });
       const d = await res.json();
       if (d.status === 'verified') {
         out.innerHTML = `

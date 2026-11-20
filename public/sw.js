@@ -1,21 +1,23 @@
 'use strict';
 
-const CACHE_NAME = 'lda-shell-v3';
+const CACHE_NAME = 'lda-shell-v3.1';
 const SHELL_ASSETS = [
-  '/',
-  '/style.css',
-  '/core.js',
-  '/templates.js',
-  '/krutidev-client.js',
-  '/phrasebook.js',
-  '/app.js',
-  '/vendor/fuse.js',
-  '/vendor/signature_pad.js',
-  '/assets/icon.svg',
-  '/fonts/Karma-Regular.ttf',
-  '/fonts/Karma-Bold.ttf',
-  '/fonts/Mukta-Regular.ttf',
-  '/fonts/Mukta-Bold.ttf',
+  './',
+  './style.css',
+  './core.js',
+  './static-vault.js',
+  './templates.js',
+  './krutidev-client.js',
+  './phrasebook.js',
+  './modules-ui.js',
+  './app.js',
+  './vendor/fuse.js',
+  './vendor/signature_pad.js',
+  './assets/icon.svg',
+  './fonts/Karma-Regular.ttf',
+  './fonts/Karma-Bold.ttf',
+  './fonts/Mukta-Regular.ttf',
+  './fonts/Mukta-Bold.ttf',
 ];
 
 self.addEventListener('install', (event) => {
@@ -35,7 +37,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET') return;
-  if (url.pathname.startsWith('/api/') || url.pathname === '/verify') return;
+  if (url.pathname.includes('/api/') || url.pathname.endsWith('/verify')) return;
 
   event.respondWith(
     fetch(event.request)

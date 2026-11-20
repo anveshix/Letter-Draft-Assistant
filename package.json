@@ -4,9 +4,10 @@
   "description": "Secure School Correspondence, Certificate, Bulk Mail-Merge, QR Verification & Offline OCR Operating System (Hindi + English)",
   "main": "server.js",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "scripts": {
+    "build": "node scripts/prepare-deploy.js",
     "start": "node server.js",
     "dev": "node server.js",
     "test": "node test/system.test.js",

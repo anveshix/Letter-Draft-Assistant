@@ -350,6 +350,39 @@ async function req(baseUrl, pathname, opts = {}) {
       assert.strictEqual(Tpl.render('Hello {{name}}{{adm?, Adm: %}}', { name: 'Anita', adm: '' }, [], {}), 'Hello Anita');
     });
 
+    // 11. Universal Cloud & Static Deployment Readiness Check
+    await step('All Cloud, Serverless, Docker & GitHub Pages deployment files are valid and ready', async () => {
+      const rootDir = path.join(__dirname, '..');
+      const requiredFiles = [
+        '.nvmrc',
+        '.node-version',
+        'Procfile',
+        'vercel.json',
+        'api/index.js',
+        'render.yaml',
+        'railway.json',
+        'nixpacks.toml',
+        'fly.toml',
+        'netlify.toml',
+        'Dockerfile',
+        '.nojekyll',
+        'index.html',
+        'scripts/prepare-deploy.js',
+        'public/vendor/fuse.js',
+        'public/vendor/signature_pad.js',
+        'public/static-vault.js',
+        'public/verify.html',
+      ];
+      for (const rel of requiredFiles) {
+        assert.ok(fs.existsSync(path.join(rootDir, rel)), `Missing deployment file: ${rel}`);
+      }
+      const vercelFn = require('../api/index.js');
+      assert.strictEqual(typeof vercelFn, 'function');
+      assert.strictEqual(vercelFn.config.api.bodyParser, false);
+      assert.strictEqual((await req(base, '/verify.html')).status, 200);
+      assert.strictEqual((await req(base, '/static-vault.js')).status, 200);
+    });
+
     console.log(`\n🎉 ALL ${passed} V3.0 TEST SUITES PASSED SUCCESSFULLY!\n`);
   } finally {
     await shutdownOcrWorker();

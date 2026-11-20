@@ -41,7 +41,24 @@ const PORT = parseInt(process.env.PORT, 10) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const ROOT = __dirname;
 const PUB = path.join(ROOT, 'public');
-const DATA = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
+function resolveWritableDataDir() {
+  if (process.env.DATA_DIR) return path.resolve(process.env.DATA_DIR);
+  const preferred = path.join(ROOT, 'data');
+  try {
+    fs.mkdirSync(path.join(preferred, 'backups'), { recursive: true });
+    const probe = path.join(preferred, '.write-probe');
+    fs.writeFileSync(probe, 'ok');
+    fs.unlinkSync(probe);
+    return preferred;
+  } catch (_) {
+    // Serverless / read-only container fallback (Vercel, AWS Lambda, Cloud Functions)
+    const fallback = path.join(os.tmpdir(), 'letter-draft-assistant-data');
+    fs.mkdirSync(path.join(fallback, 'backups'), { recursive: true });
+    return fallback;
+  }
+}
+
+const DATA = resolveWritableDataDir();
 const DB_FILE = path.join(DATA, 'db.json');
 const MASTER_XLSX_FILE = path.join(DATA, 'Master_Letter_Register.xlsx');
 const BAK = path.join(DATA, 'backups');
@@ -54,10 +71,16 @@ fs.mkdirSync(STORAGE_UPLOADS, { recursive: true });
 const authMgr = Auth.createAuthManager(DATA);
 const VERIFY_SECRET = loadOrCreateVerifySecret(DATA);
 
-// Cache vendor JS bundles in memory for instant zero-CDN serving
-const FUSE_RAW = fs.readFileSync(path.join(ROOT, 'node_modules', 'fuse.js', 'dist', 'fuse.min.cjs'), 'utf8');
-const FUSE_BROWSER_BUNDLE = `(function(){var module={exports:{}},exports=module.exports;\n${FUSE_RAW}\nwindow.Fuse=module.exports.default||module.exports;})();\n`;
-const SIGPAD_BROWSER_BUNDLE = fs.readFileSync(path.join(ROOT, 'node_modules', 'signature_pad', 'dist', 'signature_pad.umd.min.js'), 'utf8');
+// Load vendor JS bundles from public/vendor/ (or node_modules fallback)
+const VENDOR_FUSE = path.join(PUB, 'vendor', 'fuse.js');
+const FUSE_BROWSER_BUNDLE = fs.existsSync(VENDOR_FUSE)
+  ? fs.readFileSync(VENDOR_FUSE, 'utf8')
+  : `(function(){var module={exports:{}},exports=module.exports;\n${fs.readFileSync(path.join(ROOT, 'node_modules', 'fuse.js', 'dist', 'fuse.min.cjs'), 'utf8')}\nwindow.Fuse=module.exports.default||module.exports;})();\n`;
+
+const VENDOR_SIG = path.join(PUB, 'vendor', 'signature_pad.js');
+const SIGPAD_BROWSER_BUNDLE = fs.existsSync(VENDOR_SIG)
+  ? fs.readFileSync(VENDOR_SIG, 'utf8')
+  : fs.readFileSync(path.join(ROOT, 'node_modules', 'signature_pad', 'dist', 'signature_pad.umd.min.js'), 'utf8');
 
 function loadDb() {
   if (fs.existsSync(DB_FILE)) {
@@ -187,6 +210,15 @@ function sendJson(res, status, data, extraHeaders = {}) {
 }
 
 function readBody(req, maxBytes = 8 * 1024 * 1024) {
+  if (req.body !== undefined && req.body !== null) {
+    if (typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return Promise.resolve(req.body);
+    if (typeof req.body === 'string') {
+      try { return Promise.resolve(req.body ? JSON.parse(req.body) : {}); } catch (_) {}
+    }
+    if (Buffer.isBuffer(req.body)) {
+      try { return Promise.resolve(req.body.length ? JSON.parse(req.body.toString('utf8')) : {}); } catch (_) {}
+    }
+  }
   return new Promise((resolve, reject) => {
     const chunks = [];
     let n = 0;
@@ -765,4 +797,8 @@ if (require.main === module) {
   });
 }
 
-module.exports = { server, db, saveDb, DATA };
+function handler(req, res) {
+  return server.emit('request', req, res);
+}
+
+module.exports = { server, handler, db, saveDb, DATA };
