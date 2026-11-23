@@ -63,3 +63,31 @@ npm run build
 npm test
 npm run security-audit
 ```
+
+## Folder structure
+
+| Path | Contents |
+|---|---|
+| `server.js` | Express server: API routes in `api/`, business logic in `lib/` |
+| `lib/` | Batch mail-merge, DOCX/PDF/XLSX exporters, OCR, QR verification, auth, Google Sheets sync |
+| `public/` | Browser app: `index.html`, `app.js`, `core.js`, templates, phrasebook, `vendor/` libraries, fonts |
+| `storage/defaults/` | Default letterhead and signature images |
+| `scripts/` | `prepare-deploy.js` (build step for hosts) |
+| `test/` | System tests (`npm test`) |
+| `.github/workflows/` | CI: install, audit and test |
+| `start.bat`, `start.sh` | One-click launchers for Windows and Linux/macOS |
+| Platform configs | `Dockerfile`, `docker-compose.yml`, `render.yaml`, `railway.json`, `fly.toml`, `vercel.json`, `netlify.toml`, `Procfile`, `nixpacks.toml` — must stay at the root for each host |
+
+Runtime data (`data/`, `storage/uploads/`) is created on the server and is git-ignored.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately as described in [SECURITY.md](SECURITY.md). Never commit real student, staff or school data — use the sample files for testing.
+
+## License
+
+[MIT](LICENSE) © 2026 anveshix. Bundled fonts (Karma, Mukta) and vendor libraries keep their own licences (see `public/fonts/OFL-LICENSE.txt` and the files in `public/vendor/`).
+
+## Author
+
+**anveshix** — [github.com/anveshix](https://github.com/anveshix)
