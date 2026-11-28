@@ -1046,13 +1046,41 @@
       rec.start();
     };
 
-    // MODULE 6: Phonetic Toggle
-    $('#btnPhonetic').onclick = () => {
-      phoneticMode = !phoneticMode;
-      $('#btnPhonetic').classList.toggle('pri', phoneticMode);
-      $('#btnPhonetic').textContent = `⌨ Phonetic हिंदी: ${phoneticMode ? 'ON' : 'OFF'}`;
-      toast(phoneticMode ? 'Phonetic Hindi ON: Type Roman words + Space (e.g. savinya nivedan)!' : 'Phonetic Hindi OFF');
+    // MODULE 6: Phonetic Toggle (button + Ctrl+Space / F9 hotkey: switch EN <-> हिंदी on same keyboard)
+    const paintPhonetic = () => {
+      const b = $('#btnPhonetic');
+      if (b) {
+        b.classList.toggle('pri', phoneticMode);
+        b.textContent = `⌨ ${phoneticMode ? 'हिंदी' : 'EN'} · Phonetic: ${phoneticMode ? 'ON' : 'OFF'} (Ctrl+Space)`;
+      }
+      let badge = document.getElementById('langBadge');
+      if (!badge) {
+        badge = document.createElement('div');
+        badge.id = 'langBadge';
+        badge.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:9999;padding:6px 12px;border-radius:999px;font:600 13px system-ui;background:#1e293b;color:#fff;box-shadow:0 2px 8px #0004;cursor:pointer';
+        badge.title = 'Click or press Ctrl+Space to switch English / हिंदी typing';
+        badge.onclick = () => window.__togglePhonetic && window.__togglePhonetic();
+        document.body.appendChild(badge);
+      }
+      badge.textContent = phoneticMode ? 'अ  हिंदी' : 'A  English';
+      badge.style.background = phoneticMode ? '#c2410c' : '#1e293b';
     };
+    window.__togglePhonetic = () => {
+      phoneticMode = !phoneticMode;
+      paintPhonetic();
+      toast(phoneticMode ? 'हिंदी typing ON: type Roman + Space (savinya nivedan → सविनय निवेदन)' : 'English typing');
+    };
+    if (!window.__phoneticHotkey) {
+      window.__phoneticHotkey = true;
+      document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey && e.code === 'Space') || e.key === 'F9') {
+          e.preventDefault();
+          window.__togglePhonetic();
+        }
+      }, true);
+    }
+    paintPhonetic();
+    $('#btnPhonetic').onclick = () => window.__togglePhonetic();
 
     // MODULE 6: 80+ Sarkari Phrasebook
     $('#btnPhrasebook').onclick = () => {
