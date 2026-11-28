@@ -779,6 +779,25 @@
               <button class="sm" id="btnKruti" title="Convert legacy KrutiDev-010 text to Unicode">${ico('Languages', 13)} KrutiDev</button>
             </div>
 
+            <div class="voice-panel" id="voicePanel" style="border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;margin-bottom:8px;background:#f8fafc">
+              <div class="bar" style="gap:8px;flex-wrap:wrap">
+                <b>🎙 Voice Typing</b>
+                <label style="display:flex;align-items:center;gap:4px">Language
+                  <select id="voiceLang">
+                    <option value="auto">Same as letter</option>
+                    <option value="hi-IN">हिंदी (Hindi)</option>
+                    <option value="en-IN">English (India)</option>
+                  </select></label>
+                <button class="sm" id="btnVoice2" title="Start / stop microphone (F8)">🎙 Start</button>
+                <span id="voiceStatus" class="mut" style="font-size:12px">Mic off · F8 to toggle</span>
+              </div>
+              <div id="voiceHeard" style="min-height:18px;font-size:13px;margin-top:4px;color:#475569"></div>
+              <details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px">Voice commands (आवाज़ से आदेश)</summary>
+                <table style="font-size:12px;margin-top:4px">${window.VoiceStudio.COMMAND_HELP.map(([a, b]) => `<tr><td style="padding:1px 10px 1px 0"><b>${esc(a)}</b></td><td class="mut">${esc(b)}</td></tr>`).join('')}</table>
+                <small class="mut">Speak into the field you last clicked. Chrome / Edge needs internet for speech recognition.</small>
+              </details>
+            </div>
+
             <div class="ph-box">
               <small class="mut"><b>Click any System Placeholder</b> to insert live token at cursor:</small>
               <div class="ph-chips">
@@ -1003,48 +1022,73 @@
       };
     });
 
-    // MODULE 6: Voice Dictation (Web Speech API hi-IN / en-IN)
-    $('#btnVoice').onclick = () => {
+    // MODULE 6: Voice Typing — Hindi / English, spoken commands (voice.js)
+    const voiceState = { undo: [], lang: 'auto' };
+    const vStatus = (m) => { const e = $('#voiceStatus'); if (e) e.textContent = m; };
+    const vLang = () => voiceState.lang === 'auto' ? (ed.lang === 'hi' ? 'hi-IN' : 'en-IN') : voiceState.lang;
+    const vPaint = (on) => {
+      ['#btnVoice', '#btnVoice2'].forEach(id => {
+        const b = $(id); if (!b) return;
+        b.classList.toggle('voice-on', on);
+        b.textContent = on ? '🔴 Stop' : (id === '#btnVoice' ? '🎙 Voice Dictate' : '🎙 Start');
+      });
+      vStatus(on ? `Listening… ${vLang() === 'hi-IN' ? 'हिंदी' : 'English'} · say "stop listening" to end` : 'Mic off · F8 to toggle');
+    };
+    const vStop = () => { const r = activeSpeechRec; activeSpeechRec = null; if (r) { r.onend = null; try { r.stop(); } catch (_) {} } vPaint(false); };
+    const vCtx = {
+      getTarget: () => activeFocusField || $('#eBody'),
+      setTarget: (id) => { const el = $('#' + id); if (el) { el.focus(); activeFocusField = el; vStatus('→ ' + id.replace(/^e/, '')); } },
+      toast,
+      notify: (el) => el.dispatchEvent(new Event('input')),
+      setLang: (l) => {
+        voiceState.lang = l === 'hi' ? 'hi-IN' : 'en-IN';
+        const sel = $('#voiceLang'); if (sel) sel.value = voiceState.lang;
+        if (activeSpeechRec) { vStop(); vStart(); }
+      },
+      halt: () => vStop(),
+    };
+    function vStart() {
       const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRec) {
-        return toast('Browser Voice Dictation works in Chrome / Edge desktop & Android.');
-      }
-      if (activeSpeechRec) {
-        activeSpeechRec.stop();
-        activeSpeechRec = null;
-        $('#btnVoice').classList.remove('voice-on');
-        $('#btnVoice').textContent = '🎙 Voice Dictate';
-        return;
-      }
+      if (!SpeechRec) return toast('Voice typing works in Chrome / Edge (desktop & Android).');
+      if (activeSpeechRec) return;
       const rec = new SpeechRec();
-      rec.lang = ed.lang === 'hi' ? 'hi-IN' : 'en-IN';
+      rec.lang = vLang();
       rec.continuous = true;
-      rec.interimResults = false;
+      rec.interimResults = true;
       rec.onresult = (ev) => {
-        let transcript = '';
+        let interim = '';
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          if (ev.results[i].isFinal) transcript += ev.results[i][0].transcript + ' ';
+          const tr = ev.results[i][0].transcript;
+          if (ev.results[i].isFinal) {
+            const ops = window.VoiceStudio.parse(tr, rec.lang === 'hi-IN' ? 'hi' : 'en');
+            window.VoiceStudio.apply(ops, vCtx, voiceState);
+            const h = $('#voiceHeard'); if (h) h.textContent = '✔ ' + tr;
+          } else interim += tr;
         }
-        if (transcript) {
-          const target = activeFocusField || $('#eBody');
-          const pos = target.selectionStart ?? target.value.length;
-          target.value = target.value.slice(0, pos) + transcript + target.value.slice(pos);
-          target.dispatchEvent(new Event('input'));
-        }
+        if (interim) { const h = $('#voiceHeard'); if (h) h.textContent = '… ' + interim; }
       };
       rec.onend = () => {
-        activeSpeechRec = null;
-        if ($('#btnVoice')) {
-          $('#btnVoice').classList.remove('voice-on');
-          $('#btnVoice').textContent = '🎙 Voice Dictate';
-        }
+        // Chrome ends sessions on silence — restart while the user still wants the mic on
+        if (activeSpeechRec === rec) { activeSpeechRec = null; try { vStart(); } catch (_) { vPaint(false); } }
       };
-      rec.onerror = (e) => toast('Voice Dictation: ' + (e.error || 'stopped'));
+      rec.onerror = (e) => {
+        if (e.error === 'no-speech' || e.error === 'aborted') return;
+        const msg = e.error === 'not-allowed' ? 'Microphone blocked — allow it in the browser address bar.' : 'Voice: ' + (e.error || 'stopped');
+        toast(msg); vStop();
+      };
       activeSpeechRec = rec;
-      $('#btnVoice').classList.add('voice-on');
-      $('#btnVoice').textContent = `🔴 Listening (${rec.lang})…`;
+      vPaint(true);
       rec.start();
-    };
+    }
+    const vToggle = () => activeSpeechRec ? vStop() : vStart();
+    window.__toggleVoice = vToggle;
+    $('#btnVoice').onclick = vToggle;
+    $('#btnVoice2').onclick = vToggle;
+    $('#voiceLang').onchange = (e) => { voiceState.lang = e.target.value; if (activeSpeechRec) { vStop(); vStart(); } };
+    if (!window.__voiceHotkey) {
+      window.__voiceHotkey = true;
+      document.addEventListener('keydown', (e) => { if (e.key === 'F8' && window.__toggleVoice) { e.preventDefault(); window.__toggleVoice(); } }, true);
+    }
 
     // MODULE 6: Phonetic Toggle (button + Ctrl+Space / F9 hotkey: switch EN <-> हिंदी on same keyboard)
     const paintPhonetic = () => {
